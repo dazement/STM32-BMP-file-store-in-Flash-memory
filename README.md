@@ -72,7 +72,7 @@ python3 /Users/minho/gradproj/bmp_gray_practice/pc/bmp_gray.py
 Flash 원본 전체 CRC를 검사하고 픽셀을 Flash에서 다시 읽어 변환합니다.
 MCU는 전체 이미지를 RAM에 보관하지 않습니다.
 
-결과는 `pc/results/test_1024x1024_gray8.bmp`에 저장됩니다. 기존 24비트 결과와 비교 CSV는 이전 실험 자료로 보존합니다.
+결과는 `pc/results/test_1024x1024_gray8.bmp`에 저장됩니다.
 PC는 출력 CRC, Flash 원본 CRC, 독립 기준 변환과의 바이트 비교를 모두 확인합니다.
 8비트 출력은 256개 회색 팔레트를 포함한 정상 BMP입니다.
 변환식은 `(77*R + 150*G + 29*B + 128) >> 8`입니다.
@@ -201,7 +201,7 @@ Flash 저장 증명은 두 가지입니다.
 ## 보드 검증 결과 (2026-10-15)
 
 STM32F746G-DISCO(ST-LINK V2J40M27, QSPI Flash W25Q128 / JEDEC EF4018)에서 백업을 제거한 현재 소스를
-빌드·다운로드한 뒤 `./run_all.sh`로 확인했습니다(전체 247초).
+빌드·다운로드한 뒤 `./run_all.sh`로 확인했습니다(전체 약 4분).
 UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트, CRC32 978AB7D9)입니다.
 
 | 항목 | 명령 | 결과 |
@@ -210,7 +210,7 @@ UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트
 | C 모의 테스트 | `tests/test_uart_dma.c`, `test_uart_tx_dma.c`, `test_bmp_gray.c` | 3개 PASS |
 | 펌웨어 빌드 | CMake Debug, GCC 14.3.1 | 경고 0, FLASH 38,164 B (3.6%), RAM 35,320 B (10.8%) |
 | 다운로드 | STM32_Programmer_CLI | Download verified successfully |
-| 원본 저장·복원 | `demo_roundtrip.py` | 3,145,782바이트 전체 일치, CRC32·SHA-256 일치, 버퍼 초과 0회, 86.4 s |
+| 원본 저장·복원 | `demo_roundtrip.py` | 3,145,782바이트 전체 일치, CRC32·SHA-256 일치, 버퍼 초과 0회, 86.5 s |
 | Gray 전체 과정 | `bmp_gray.py` | Flash CRC 일치, 기준 변환과 일치, 72.8 s |
 | 작은 데이터 반복 | `uart_flash_test.py --repeat 12` | 12회 모두 PASS |
 | Flash 칩 직접 덤프 | ST 외부 로더 `W25Q128JVEIQ_STM32F746G-DISCO.stldr` | `0x90000000`부터 3,145,782바이트 = 원본 BMP |

@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-10-15T19:53:21",
+  "timestamp": "2026-10-15T20:05:27",
   "mode": "flash_read_only",
   "input": "/Users/minho/gradproj/bmp_gray_practice/pc/images/test_1024x1024.bmp",
-  "restored": "/Users/minho/gradproj/bmp_gray_practice/pc/results/demo_restored_20261015_195246_564724.bmp",
+  "restored": "/Users/minho/gradproj/bmp_gray_practice/pc/results/demo_restored_20261015_200453_061600.bmp",
   "bytes": 3145782,
   "input_crc32": "978AB7D9",
   "restored_crc32": "978AB7D9",
@@ -23,5 +23,5 @@
   "dma_b": 0,
   "dma_overruns": 0,
   "store_mcu_ms": 0,
-  "roundtrip_and_verification_seconds": 34.574749708
+  "roundtrip_and_verification_seconds": 34.575152708000005
 }
