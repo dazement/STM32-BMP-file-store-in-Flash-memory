@@ -4,6 +4,60 @@ STM32F746G-DISCO의 USART1과 보드 내장 QUADSPI Flash를 사용합니다.
 현재 단계는 **3 MiB 이상의 24비트 BMP 전체 저장 → Flash 재읽기 → Gray BMP 변환 → PC 수신**입니다.
 UART RX는 하드웨어 Double Buffer, Gray 출력 TX는 DMA 이중 버퍼를 사용합니다.
 
+## STM32CubeMX 설정
+
+`bmp_gray_practice.ioc`를 STM32CubeMX 6.18.1(STM32Cube FW_F7 V1.17.4)로 열면 아래 설정이 모두 들어 있습니다.
+처음부터 만들 때는 Board Selector에서 **STM32F746G-DISCO**를 고르고,
+모든 주변장치를 기본 모드로 초기화할지 묻는 창에서 No를 누른 뒤 아래 항목만 설정합니다.
+
+### Pinout & Configuration
+
+| 항목 | 설정 |
+| --- | --- |
+| SYS | Debug: Serial Wire (PA13 SWDIO, PA14 SWCLK), Timebase Source: SysTick |
+| RCC | HSE: Crystal/Ceramic Resonator (PH0, PH1) |
+| USART1 | Mode: Asynchronous, PA9 TX, PB7 RX (ST-LINK 가상 COM 포트) |
+| USART1 Parameter | 115200 Bits/s, 8 Bits, Parity None, Stop Bits 1, TX and RX, Over Sampling 16, HW Flow Control 없음 |
+| QUADSPI | Bank1 with Quad SPI Lines: PB2 CLK, PB6 NCS, PD11 IO0, PD12 IO1, PE2 IO2, PD13 IO3 |
+| QUADSPI Parameter | Clock Prescaler 7 (27 MHz), FIFO Threshold 4, Sample Shifting: Half Cycle, Flash Size 23 (16 MiB), Chip Select High Time 8 Cycles, Clock Mode Low |
+| CORTEX_M7 | CPU ICache·DCache Disabled, MPU는 CubeMX 기본 Region 0 유지 |
+
+USART1의 DMA Settings 탭에서 두 요청을 추가합니다. 두 요청 모두 FIFO는 사용하지 않습니다.
+
+| DMA Request | Stream | Direction | Mode | Priority | Increment | Data Width |
+| --- | --- | --- | --- | --- | --- | --- |
+| USART1_RX | DMA2 Stream 2 | Peripheral To Memory | **Circular** | Low | Memory | Byte / Byte |
+| USART1_TX | DMA2 Stream 7 | Memory To Peripheral | Normal | Low | Memory | Byte / Byte |
+
+NVIC는 Priority Group을 4 bits for pre-emption priority로 두고
+USART1 global interrupt, DMA2 stream2 global interrupt, DMA2 stream7 global interrupt를 켭니다.
+
+### Clock Configuration
+
+- HSE 25 MHz → PLL Source HSE, /M 25, ×N 432, /P 2 → SYSCLK 216 MHz (System Clock Mux: PLLCLK).
+- /Q는 9로 둡니다(48 MHz).
+- AHB /1 = 216 MHz, APB1 /4 = 54 MHz, APB2 /2 = 108 MHz입니다. USART1 클럭은 PCLK2 108 MHz입니다.
+- Over-Drive와 Flash Latency 7 WS는 CubeMX가 216 MHz 설정에 맞춰 생성합니다.
+
+### Project Manager
+
+- Project Name `bmp_gray_practice`, Toolchain / IDE: **CMake**.
+- Minimum Heap Size 0x200, Minimum Stack Size 0x400.
+- Code Generator: Copy only the necessary library files,
+  Keep User Code when re-generating 체크, Delete previously generated files when not re-generated 체크.
+
+### 코드 재생성 시 주의
+
+- USART1_RX DMA는 반드시 Circular여야 합니다. `UartDmaRx_Start()`는 Circular가 아니면 `HAL_ERROR`를 반환합니다.
+  Double Buffer 모드는 CubeMX 항목이 아니며 펌웨어가 `HAL_DMAEx_MultiBufferStart_IT()`로 실행 중에 켭니다.
+- 115200은 부팅 시 속도입니다. 921600·2250000은 PC 요청으로 펌웨어가 실행 중에 바꿉니다.
+- CubeMX 기본 MPU Region 0은 0x60000000–0xDFFFFFFF 접근을 막습니다.
+  QUADSPI 레지스터(0xA0001000)를 여는 Region 1은 `main.c`의 `USER CODE BEGIN SysInit` 블록에 있으므로 재생성해도 유지됩니다.
+- 직접 작성한 코드는 `USER CODE BEGIN`/`END` 블록 안에만 둡니다.
+  추가 소스 파일은 최상위 `CMakeLists.txt`의 `target_sources`에 등록되어 있으며,
+  이 파일은 처음 한 번만 생성되므로 재생성해도 덮어쓰지 않습니다(`cmake/stm32cubemx/`는 매번 다시 생성됩니다).
+- GENERATE CODE 후 CMake Debug 프리셋으로 다시 빌드합니다.
+
 ## 회색조 전체 과정 실행
 
 새 펌웨어를 다운로드하고 Continue를 누른 뒤, Serial Monitor를 닫고 실행합니다.
