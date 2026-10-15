@@ -4,6 +4,34 @@ STM32F746G-DISCO의 USART1과 보드 내장 QUADSPI Flash를 사용합니다.
 현재 단계는 **3 MiB 이상의 24비트 BMP 전체 저장 → Flash 재읽기 → Gray BMP 변환 → PC 수신**입니다.
 UART RX는 하드웨어 Double Buffer, Gray 출력 TX는 DMA 이중 버퍼를 사용합니다.
 
+## 준비 (macOS · Windows)
+
+| 항목 | macOS | Windows |
+| --- | --- | --- |
+| VS Code + STM32Cube for VS Code 확장 | 필요 (ARM GCC, CMake, Ninja, STM32CubeProgrammer를 자동 설치) | 같음 |
+| Python 3.9 이상 | `python3` (Xcode Command Line Tools에 포함) | [python.org](https://www.python.org/downloads/)에서 설치, `py` 명령 사용 |
+| pyserial | 선택 (없으면 표준 라이브러리로 통신) | **필수**: `py -m pip install pyserial` |
+| C 컴파일러 (모의 테스트용, 선택) | Xcode Command Line Tools의 `cc` | MSYS2 MinGW `gcc` 또는 LLVM `clang` (없으면 건너뜀) |
+| 보드 포트 | `/dev/cu.usbmodem…` 자동 선택 | `COM3` 같은 COM 포트 자동 선택 |
+
+Windows에서 ST-LINK가 인식되지 않으면 ST 웹사이트의 ST-LINK USB 드라이버(STSW-LINK009)를 설치합니다.
+
+```sh
+git clone https://github.com/dazement/STM32-BMP-file-store-in-Flash-memory.git
+cd STM32-BMP-file-store-in-Flash-memory
+```
+
+이 README의 명령은 저장소 폴더에서 실행합니다. **Windows에서는 `python3` 대신 `py`를 씁니다**
+(예: `py pc/bmp_gray.py`). 포트를 직접 고를 때는 `--port /dev/cu.usbmodem1103`(macOS),
+`--port COM5`(Windows)처럼 지정합니다.
+
+| 작업 | macOS | Windows (PowerShell·명령 프롬프트) |
+| --- | --- | --- |
+| 전체 실행 | `./run_all.sh` | `py run_all.py` |
+| Gray 변환 | `python3 pc/bmp_gray.py` | `py pc/bmp_gray.py` |
+| 원본 저장·복원 Demo | `python3 pc/demo_roundtrip.py` | `py pc/demo_roundtrip.py` |
+| PC 단위 테스트 | `python3 -m unittest discover -s pc -p "test_*.py"` | `py -m unittest discover -s pc -p "test_*.py"` |
+
 ## STM32CubeMX 설정
 
 `bmp_gray_practice.ioc`를 STM32CubeMX 6.18.1(STM32Cube FW_F7 V1.17.4)로 열면 아래 설정이 모두 들어 있습니다.
@@ -63,7 +91,7 @@ USART1 global interrupt, DMA2 stream2 global interrupt, DMA2 stream7 global inte
 새 펌웨어를 다운로드하고 Continue를 누른 뒤, Serial Monitor를 닫고 실행합니다.
 
 ```sh
-python3 /Users/minho/gradproj/bmp_gray_practice/pc/bmp_gray.py
+python3 pc/bmp_gray.py
 ```
 
 운용 출력은 8비트 Gray로 고정합니다. UART 전송 단위는 8N1이며 입력 원본은 24비트 BMP를 유지합니다.
@@ -87,7 +115,7 @@ Flash의 저장 데이터만으로 변환하는 확인은 MCU를 리셋한 뒤 �
 원본 파일은 Flash CRC와 출력 비교의 기준으로만 PC에서 사용하며 MCU로 재전송하지 않습니다.
 
 ```sh
-python3 /Users/minho/gradproj/bmp_gray_practice/pc/bmp_gray.py --convert-only
+python3 pc/bmp_gray.py --convert-only
 ```
 
 ## 실행
@@ -99,12 +127,12 @@ python3 /Users/minho/gradproj/bmp_gray_practice/pc/bmp_gray.py --convert-only
 3. 일반 터미널에서 실행합니다.
 
 ```sh
-python3 /Users/minho/gradproj/bmp_gray_practice/pc/bmp_store.py
+python3 pc/bmp_store.py
 ```
 
 기본 입력은 `pc/images/test_1024x1024.bmp`입니다.
 1024×1024, 24비트, 3,145,782바이트이며 없으면 자동 생성합니다.
-자신의 BMP는 `--in /absolute/path/image.bmp`로 선택합니다.
+자신의 BMP는 `--in 경로/image.bmp`로 선택합니다. `pc/images/earth_apollo17_1024x1024.bmp`도 함께 들어 있습니다.
 입력은 압축되지 않은 24비트 BMP, 3 MiB 이상 4,128,768바이트 이하입니다.
 
 프로그램은 시작 시 115200 baud로 연결한 뒤 921600 baud로 변경합니다.
@@ -137,7 +165,7 @@ PC 원본과 바이트 단위 비교 및 CRC 비교가 모두 통과해야 PASS�
 ## 작은 데이터 반복 확인
 
 ```sh
-python3 /Users/minho/gradproj/bmp_gray_practice/pc/uart_flash_test.py --repeat 12
+python3 pc/uart_flash_test.py --repeat 12
 ```
 
 이 테스트는 칩의 마지막 4 KiB에서 1024바이트 저장·재읽기를 반복합니다.
@@ -149,9 +177,10 @@ python3 /Users/minho/gradproj/bmp_gray_practice/pc/uart_flash_test.py --repeat 1
 PC 프로토콜 및 BMP 생성 검사는 다음과 같습니다.
 
 ```sh
-python3 -m unittest discover -s pc -p 'test_*.py' -v
+python3 -m unittest discover -s pc -p "test_*.py" -v
 ```
 
+아래 C 모의 검사 명령은 macOS 기준입니다. Windows에서는 `py run_all.py`가 `gcc`나 `clang`을 찾아 같은 검사를 실행합니다.
 DBM 소비자 검사는 생산 코드에 모의 DMA 레지스터를 연결하여
 A/B 전환, 부분 수신, 지연된 IRQ, 덮어쓰기 감지와 오류 복구를 확인합니다.
 
@@ -171,7 +200,10 @@ cc -std=c11 -Wall -Wextra -Werror -I Core/Inc tests/test_bmp_gray.c Core/Src/bmp
 
 모의 검사는 실제 보드에서의 통신 검증을 대신하지 않습니다.
 
-VS Code 없이 명령줄에서 빌드·다운로드할 때는 STM32Cube 확장이 설치한 도구를 사용합니다.
+VS Code 없이 명령줄에서 빌드·다운로드하려면 OS와 관계없이 `run_all.py`를 쓰는 것이 가장 간단합니다.
+STM32Cube 확장이 설치한 도구를 `CUBE_BUNDLE_PATH` 환경변수나 기본 위치
+(macOS `~/Library/Application Support/stm32cube/bundles`, Windows `%LOCALAPPDATA%\stm32cube\bundles`)에서 찾습니다.
+macOS에서 직접 실행할 때는 다음과 같습니다(번들 버전은 설치된 것에 맞춰 바꿉니다).
 
 ```sh
 CUBE="$HOME/Library/Application Support/stm32cube/bundles"
@@ -185,11 +217,15 @@ cmake --preset Debug && cmake --build --preset Debug
 
 Serial Monitor와 VS Code 디버그 세션을 닫고 실행합니다.
 단위 테스트 → 빌드(`build/cli/`) → 다운로드 → 보드 검증 → Flash 저장 증명을 차례로 수행하며,
-실패하면 그 단계에서 멈춥니다.
+실패하면 그 단계에서 멈춥니다. 실제 내용은 `run_all.py` 하나이고, `run_all.sh`는 macOS용 바로가기입니다.
 
 ```sh
-./run_all.sh
+./run_all.sh          # macOS (python3 run_all.py와 같음)
+py run_all.py         # Windows
 ```
+
+시작할 때 도구 위치, 보드 포트, ST-LINK를 다른 프로그램이 쓰고 있는지를 먼저 확인합니다.
+C 컴파일러가 없으면 C 모의 테스트만 건너뛰고 마지막에 알려 줍니다.
 
 Flash 저장 증명은 두 가지입니다.
 
@@ -201,7 +237,9 @@ Flash 저장 증명은 두 가지입니다.
 ## 보드 검증 결과 (2026-10-15)
 
 STM32F746G-DISCO(ST-LINK V2J40M27, QSPI Flash W25Q128 / JEDEC EF4018)에서 백업을 제거한 현재 소스를
-빌드·다운로드한 뒤 `./run_all.sh`로 확인했습니다(전체 약 4분).
+빌드·다운로드한 뒤 `run_all.py`로 확인했습니다(전체 약 4분).
+macOS에서 표준 라이브러리 통신과 pyserial 통신(Windows와 같은 경로) 두 방식 모두 9단계를 통과했습니다.
+Windows 실제 PC에서의 실행은 아직 확인하지 않았으며, Windows용 도구 경로 탐색은 모의 폴더로 확인했습니다.
 UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트, CRC32 978AB7D9)입니다.
 
 | 항목 | 명령 | 결과 |
@@ -228,9 +266,19 @@ UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트
 원본 BMP 그대로 저장·복원하는 실행 프로그램입니다.
 
 ```sh
-python3 /Users/minho/gradproj/bmp_gray_practice/pc/demo_roundtrip.py
+python3 pc/demo_roundtrip.py
 ```
 
 리셋 후 Flash에서 복원만 확인하려면 `--read-only`를 사용합니다.
 CRC32, SHA-256, 전체 바이트 비교와 실제 칩 ID를 JSON으로 기록합니다.
 발표 자료와 대본은 `presentation_oct20/output/`에 있습니다.
+
+## 문제 해결
+
+| 증상 | 해결 |
+| --- | --- |
+| `ST-LINK를 다른 프로그램이 사용 중입니다` | VS Code 디버그 세션(Shift+F5)이나 STM32CubeProgrammer를 종료합니다. |
+| `시리얼 포트` 오류, 포트를 열 수 없음 | VS Code Serial Monitor 등 포트를 연 프로그램을 닫습니다. 포트가 여러 개면 `--port`로 지정합니다. |
+| `Windows에서는 pyserial이 필요합니다` | `py -m pip install pyserial` |
+| `도구를 찾을 수 없습니다` | VS Code에 STM32Cube 확장을 설치하고 프로젝트를 한 번 빌드합니다. 다른 위치라면 `CUBE_BUNDLE_PATH`를 번들 폴더로 지정합니다. |
+| `보드 응답 시간 초과` | 보드 RESET 버튼을 누르고 다시 실행합니다. 검증 중 한 번, 3 MB 재읽기가 95.8% 지점에서 멈췄습니다(받은 부분은 원본과 일치). 이후 7회 반복에서는 재현되지 않았습니다. |

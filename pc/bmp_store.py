@@ -9,7 +9,7 @@ import sys
 import time
 import zlib
 
-from uart_flash_test import SerialPort, TestError, auto_port, synchronize
+from uart_flash_test import TestError, auto_port, open_port, synchronize
 
 ROOT = Path(__file__).resolve().parent
 IMAGE_LIMIT = 0x3F0000
@@ -153,7 +153,7 @@ def main(argv=None):
         data = source.read_bytes()
         validate_bmp(data)
         print(f"입력: {source}\n크기: {len(data):,}바이트", flush=True)
-        port = SerialPort(args.port or auto_port())
+        port = open_port(args.port or auto_port())
         chip = synchronize(port)
         if port.rx_mode != "DBM":
             raise TestError("새 Double Buffer 펌웨어를 다운로드하고 ▶ Continue를 누르세요.")

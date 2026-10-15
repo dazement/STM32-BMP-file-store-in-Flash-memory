@@ -13,7 +13,7 @@ import zlib
 
 from bmp_store import (ROOT, change_baud, dma_stats, make_test_bmp, send_file,
                        validate_bmp)
-from uart_flash_test import SerialPort, TestError, auto_port, synchronize
+from uart_flash_test import TestError, auto_port, open_port, synchronize
 
 
 def gray_reference(data, bpp=8):
@@ -109,10 +109,10 @@ def record_timing(path, row):
     path.parent.mkdir(parents=True, exist_ok=True)
     new = not path.exists() or path.stat().st_size == 0
     if not new:
-        with path.open(newline="") as source:
+        with path.open(newline="", encoding="utf-8") as source:
             if next(csv.reader(source), None) != CSV_FIELDS:
                 raise TestError("기존 CSV 형식이 다릅니다. --csv로 다른 파일을 지정하세요.")
-    with path.open("a", newline="") as output:
+    with path.open("a", newline="", encoding="utf-8") as output:
         writer = csv.DictWriter(output, fieldnames=CSV_FIELDS)
         if new: writer.writeheader()
         writer.writerow(row)
@@ -141,7 +141,7 @@ def main(argv=None):
         formats = (8,)
         references = {bpp: gray_reference(source, bpp) for bpp in formats}
         print(f"입력: {source_path}\n크기: {len(source):,}바이트", flush=True)
-        port = SerialPort(args.port or auto_port())
+        port = open_port(args.port or auto_port())
         chip = synchronize(port)
         if port.rx_mode != "DBM" or "GRAY8" not in port.capabilities:
             raise TestError("새 Gray 변환 펌웨어를 다운로드하고 ▶ Continue를 누르세요.")

@@ -10,7 +10,7 @@ import time
 import zlib
 
 from bmp_store import ROOT, change_baud, dma_stats, make_test_bmp, read_flash_file, send_file, validate_bmp
-from uart_flash_test import SerialPort, TestError, auto_port, synchronize
+from uart_flash_test import TestError, auto_port, open_port, synchronize
 
 
 def main(argv=None):
@@ -31,7 +31,7 @@ def main(argv=None):
         expected_sha = hashlib.sha256(source).hexdigest()
         print("원본:", source_path, flush=True)
         print(f"크기: {len(source):,}바이트 / CRC32: {expected_crc:08X}", flush=True)
-        port = SerialPort(args.port or auto_port())
+        port = open_port(args.port or auto_port())
         chip = synchronize(port)
         if port.rx_mode != "DBM": raise TestError("새 펌웨어를 다운로드하고 Continue를 누르세요.")
         flash_model = "W25Q128" if chip == "EF4018" else "W25Q32"

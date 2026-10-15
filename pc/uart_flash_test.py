@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Small UART -> flash -> UART check for macOS/Linux; standard library only."""
+"""Small UART -> flash -> UART check.
+
+macOS/Linux need only the standard library (termios). Windows needs pyserial;
+when pyserial is installed it is used on every OS.
+"""
 
 import argparse
 import glob
@@ -15,7 +19,22 @@ class TestError(Exception):
     pass
 
 
-class SerialPort:
+class LineReader:
+    def read_line(self, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        result = bytearray()
+        while len(result) < 256:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TestError("보드 응답 시간 초과")
+            byte = self.read_exact(1, remaining)
+            if byte == b"\n":
+                return result.decode("ascii", errors="replace").strip()
+            result.extend(byte)
+        raise TestError("예상하지 못한 응답: UART 속도 115200을 확인하세요.")
+
+
+class PosixSerialPort(LineReader):
     def __init__(self, path):
         import termios
 
@@ -93,26 +112,69 @@ class SerialPort:
             result.extend(chunk)
         return bytes(result)
 
-    def read_line(self, timeout=5.0):
+
+class PySerialPort(LineReader):
+    POLL_SECONDS = 0.05
+
+    def __init__(self, path, serial):
+        self.timeout_error = serial.SerialTimeoutException
+        # Fixed timeouts: pyserial reconfigures the port whenever they change.
+        self.serial = serial.Serial(path, 115200, timeout=self.POLL_SECONDS, write_timeout=3.0)
+        self.serial.reset_input_buffer()
+
+    def close(self):
+        if self.serial is not None:
+            self.serial.close()
+            self.serial = None
+
+    def set_baud(self, baud):
+        self.serial.baudrate = baud
+
+    def write_all(self, data, timeout=3.0):
+        if self.serial.write_timeout != timeout:
+            self.serial.write_timeout = timeout
+        try:
+            count = self.serial.write(data)
+        except self.timeout_error as exc:
+            raise TestError("UART 전송 시간 초과") from exc
+        if count != len(data):
+            raise TestError("UART 전송 시간 초과")
+
+    def read_exact(self, size, timeout=5.0):
         deadline = time.monotonic() + timeout
         result = bytearray()
-        while len(result) < 256:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TestError("보드 응답 시간 초과")
-            byte = self.read_exact(1, remaining)
-            if byte == b"\n":
-                return result.decode("ascii", errors="replace").strip()
-            result.extend(byte)
-        raise TestError("예상하지 못한 응답: UART 속도 115200을 확인하세요.")
+        while len(result) < size:
+            if time.monotonic() >= deadline:
+                raise TestError("보드 응답 시간 초과: ▶ Continue와 시리얼 모니터 종료를 확인하세요.")
+            result.extend(self.serial.read(size - len(result)))
+        return bytes(result)
+
+
+def open_port(path):
+    try:
+        import serial
+    except ImportError:
+        if os.name != "posix":
+            raise TestError("Windows에서는 pyserial이 필요합니다: py -m pip install pyserial") from None
+        return PosixSerialPort(path)
+    return PySerialPort(path, serial)
+
+
+ST_LINK_VID = 0x0483
 
 
 def auto_port():
-    ports = sorted(glob.glob("/dev/cu.usbmodem*"))
+    ports = []
+    try:
+        from serial.tools import list_ports
+        ports = sorted(p.device for p in list_ports.comports() if p.vid == ST_LINK_VID)
+    except ImportError:
+        pass
     if not ports:
-        ports = sorted(glob.glob("/dev/ttyACM*"))
+        ports = sorted(glob.glob("/dev/cu.usbmodem*")) or sorted(glob.glob("/dev/ttyACM*"))
     if len(ports) != 1:
-        raise TestError("보드 포트를 하나로 선택할 수 없습니다. --port /dev/cu.usbmodem… 을 지정하세요.")
+        raise TestError("보드 포트를 하나로 선택할 수 없습니다. "
+                        "--port로 지정하세요 (macOS /dev/cu.usbmodem…, Windows COM5 등).")
     return ports[0]
 
 
@@ -176,11 +238,9 @@ def main(argv=None):
             raise TestError("--size는 1~1024 사이여야 합니다.")
         if not 1 <= args.repeat <= 1000:
             raise TestError("--repeat는 1~1000 사이여야 합니다.")
-        if os.name != "posix":
-            raise TestError("이 프로그램은 macOS/Linux용입니다.")
         path = args.port or auto_port()
         print("연결:", path, "(115200 baud)", flush=True)
-        port = SerialPort(path)
+        port = open_port(path)
         chip_id = synchronize(port)
         print("Flash ID:", chip_id, flush=True)
         if port.rx_mode != "DBM":
