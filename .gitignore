@@ -2,3 +2,4 @@ build
 mx.scratch
 !.settings
 .DS_Store
+pc/backups/

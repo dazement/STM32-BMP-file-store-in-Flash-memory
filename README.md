@@ -125,6 +125,7 @@ python3 /Users/minho/gradproj/bmp_gray_practice/pc/bmp_store.py
 첫 4 MiB 안의 0x000000–0x3EFFFF를 이미지 영역으로 사용합니다.
 실제 삭제 범위는 파일 크기를 64 KiB 경계로 올림한 크기입니다.
 삭제 전에 그 전체 범위를 PC의 `pc/backups/`에 읽고 CRC를 확인해 저장합니다.
+`pc/backups/`는 보드별 Flash 덤프이므로 git에 올리지 않습니다(`.gitignore`).
 펌웨어는 백업 범위를 보내지 않은 상태에서는 큰 파일 쓰기를 거부합니다.
 실패한 읽기는 `.partial`로 남고 완료된 백업으로 취급하지 않습니다.
 
@@ -160,7 +161,49 @@ cc -std=c11 -Wall -Wextra -Werror -I tests/dma_stub tests/test_uart_dma.c -o /tm
 /tmp/bmp_gray_dbm_test
 ```
 
+TX 이중 버퍼와 BMP 변환 핵심 함수도 같은 방식으로 검사합니다.
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -I tests/dma_stub tests/test_uart_tx_dma.c -o /tmp/bmp_gray_tx_test
+/tmp/bmp_gray_tx_test
+cc -std=c11 -Wall -Wextra -Werror -I Core/Inc tests/test_bmp_gray.c Core/Src/bmp_gray.c -o /tmp/bmp_gray_core_test
+/tmp/bmp_gray_core_test
+```
+
 모의 검사는 실제 보드에서의 통신 검증을 대신하지 않습니다.
+
+VS Code 없이 명령줄에서 빌드·다운로드할 때는 STM32Cube 확장이 설치한 도구를 사용합니다.
+
+```sh
+CUBE="$HOME/Library/Application Support/stm32cube/bundles"
+export PATH="$CUBE/gnu-tools-for-stm32/14.3.1+st.2/bin:$PATH"
+cmake --preset Debug && cmake --build --preset Debug
+"$CUBE/programmer/2.23.0/bin/STM32_Programmer_CLI" -c port=SWD mode=UR reset=HWrst \
+  -d build/Debug/bmp_gray_practice.elf -v -rst
+```
+
+## 보드 검증 결과 (2026-10-15)
+
+STM32F746G-DISCO(ST-LINK V2J40M27, QSPI Flash W25Q128 / JEDEC EF4018)에서 현재 소스를 빌드·다운로드한 뒤 확인했습니다.
+UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트, CRC32 978AB7D9)입니다.
+
+| 항목 | 명령 | 결과 |
+| --- | --- | --- |
+| PC 단위 테스트 | `python3 -m unittest discover -s pc -p 'test_*.py'` | 19개 PASS |
+| C 모의 테스트 | `tests/test_uart_dma.c`, `test_uart_tx_dma.c`, `test_bmp_gray.c` | 3개 PASS |
+| 펌웨어 빌드 | CMake Debug, GCC 14.3.1 | 경고 0, FLASH 38,388 B (3.7%), RAM 35,320 B (10.8%) |
+| 다운로드 | STM32_Programmer_CLI | Download verified successfully |
+| 원본 저장·복원 | `demo_roundtrip.py` | 3,145,782바이트 전체 일치, CRC32·SHA-256 일치, 버퍼 초과 0회, 87.2 s |
+| 리셋 후 복원 | `demo_roundtrip.py --read-only` | 전체 일치, 35.3 s |
+| Gray 전체 과정 | `bmp_gray.py` | Flash CRC 일치, 기준 변환과 일치, 72.4 s (백업 준비 36.1 s 별도) |
+| 리셋 후 Gray 변환 | `bmp_gray.py --convert-only` | Flash CRC 일치, 기준 변환과 일치, 20.6 s |
+| 작은 데이터 반복 | `uart_flash_test.py --repeat 12` | 12회 모두 PASS |
+
+원본과 복원 BMP의 SHA-256은 `0bfd1da377908544c1b1d2c0e10f8a3b53434448786bcac53d12b27c50f1dd8c`로 같습니다.
+8비트 Gray 출력은 1,049,654바이트, CRC32 58622AEF로 이전 측정과 같습니다.
+프로젝트 스크립트와 별도로 `shasum`·`cmp`로 복원 파일을 비교하고,
+변환식을 다시 계산해 1,048,576개 픽셀 모두와 256단계 팔레트가 일치함을 확인했습니다.
+측정 기록은 `pc/results/demo_report_20261015_*.json`과 `pc/results/timings.csv`에 있습니다.
 
 ## 10월 20일 2차 발표 필수 Demo
 
