@@ -2,7 +2,6 @@
 """Store a >=3 MiB true-color BMP, then compare a complete flash readback."""
 import argparse
 from collections import deque
-from datetime import datetime
 import os
 from pathlib import Path
 import struct
@@ -14,7 +13,6 @@ from uart_flash_test import SerialPort, TestError, auto_port, synchronize
 
 ROOT = Path(__file__).resolve().parent
 IMAGE_LIMIT = 0x3F0000
-BLOCK_BYTES = 65536
 CHUNK_BYTES = 4096
 
 
@@ -63,11 +61,10 @@ def change_baud(port, baud):
     synchronize(port)
 
 
-def read_flash_file(port, length, destination, backup=False):
-    label = "BACKUP" if backup else "FILE DATA"
-    port.write_all((b"UFB1" if backup else b"UFR1") + struct.pack("<I", length))
+def read_flash_file(port, length, destination):
+    port.write_all(b"UFR1" + struct.pack("<I", length))
     line = port.read_line()
-    if line != f"{label} {length}":
+    if line != f"FILE DATA {length}":
         raise TestError("MCU: " + line)
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.name + ".partial")
@@ -82,10 +79,10 @@ def read_flash_file(port, length, destination, backup=False):
             done += len(chunk)
             percent = done * 100 // length
             if percent // 10 != last_percent // 10:
-                print(f"  {'백업' if backup else 'Flash 재읽기'}: {percent}%", flush=True)
+                print(f"  Flash 재읽기: {percent}%", flush=True)
                 last_percent = percent
         line = port.read_line()
-        if line != f"{label} DONE {crc & 0xFFFFFFFF:08X}":
+        if line != f"FILE DATA DONE {crc & 0xFFFFFFFF:08X}":
             raise TestError("Flash 읽기 CRC가 다릅니다: " + line)
         output.flush()
         os.fsync(output.fileno())
@@ -149,7 +146,6 @@ def main(argv=None):
     args = parser.parse_args(argv)
     port = None
     high_baud = False
-    backup_path = None
     try:
         source = args.input_path or ROOT / "images" / "test_1024x1024.bmp"
         if args.input_path is None and not source.exists():
@@ -166,12 +162,6 @@ def main(argv=None):
             change_baud(port, args.baud)
             high_baud = True
         print(f"UART: {args.baud:,} baud", flush=True)
-        length = (len(data) + BLOCK_BYTES - 1) & ~(BLOCK_BYTES - 1)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        backup_path = ROOT / "backups" / f"flash_before_bmp_{stamp}.bin"
-        print("기존 Flash 영역 백업 중...", flush=True)
-        read_flash_file(port, length, backup_path, backup=True)
-        print("백업 완료:", backup_path, flush=True)
         start = time.monotonic()
         milliseconds = send_file(port, data)
         destination = ROOT / "results" / (source.stem + "_flash_readback.bmp")
@@ -184,13 +174,11 @@ def main(argv=None):
             raise TestError(f"버퍼 전환 확인 실패: A={a}, B={b}, overrun={overruns}")
         print(f"PASS: {len(data):,}바이트 BMP 전체 저장·재읽기 일치")
         print(f"Double Buffer: A {a}회 / B {b}회 / 버퍼 초과 {overruns}회")
-        print(f"저장 {milliseconds / 1000:.2f} s / 저장+재읽기 {elapsed:.2f} s (백업 준비 시간 별도)")
+        print(f"저장 {milliseconds / 1000:.2f} s / 저장+재읽기 {elapsed:.2f} s")
         print("재읽기 BMP:", destination)
         return 0
     except (OSError, TestError) as exc:
         print("실패:", exc, file=sys.stderr)
-        if backup_path:
-            print("백업 위치:", backup_path, file=sys.stderr)
         return 1
     finally:
         if port is not None:

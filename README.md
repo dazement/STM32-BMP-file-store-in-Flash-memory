@@ -68,7 +68,7 @@ python3 /Users/minho/gradproj/bmp_gray_practice/pc/bmp_gray.py
 
 운용 출력은 8비트 Gray로 고정합니다. UART 전송 단위는 8N1이며 입력 원본은 24비트 BMP를 유지합니다.
 기본 입력은 아래의 3,145,782바이트 BMP입니다. UART 기본 속도는 921600입니다.
-기존 Flash 백업 후 원본 전체를 저장하며, 삭제·프로그램 완료를 확인한 다음
+원본 전체를 백업 없이 바로 Flash에 저장하며, 삭제·프로그램 완료를 확인한 다음
 Flash 원본 전체 CRC를 검사하고 픽셀을 Flash에서 다시 읽어 변환합니다.
 MCU는 전체 이미지를 RAM에 보관하지 않습니다.
 
@@ -79,7 +79,7 @@ PC는 출력 CRC, Flash 원본 CRC, 독립 기준 변환과의 바이트 비교�
 상향식·하향식 저장 순서와 행 패딩을 처리합니다.
 
 `pc/results/timings.csv`에 입력 전송 요청부터 Gray 마지막 바이트 수신까지의 시간을 기록합니다.
-백업 준비 시간은 별도 열에 기록합니다. 삭제 시간은 본 처리 시간에 포함됩니다.
+삭제 시간은 본 처리 시간에 포함됩니다.
 `--repeat 3`으로 8비트 출력을 3회 측정하면 중앙값을 확인할 수 있습니다.
 `--format 8`이 기본이며, `--baud 2250000`으로 더 높은 링크 속도를 시험할 수 있습니다.
 
@@ -124,16 +124,15 @@ python3 /Users/minho/gradproj/bmp_gray_practice/pc/bmp_store.py
 
 첫 4 MiB 안의 0x000000–0x3EFFFF를 이미지 영역으로 사용합니다.
 실제 삭제 범위는 파일 크기를 64 KiB 경계로 올림한 크기입니다.
-삭제 전에 그 전체 범위를 PC의 `pc/backups/`에 읽고 CRC를 확인해 저장합니다.
-`pc/backups/`는 보드별 Flash 덤프이므로 git에 올리지 않습니다(`.gitignore`).
-펌웨어는 백업 범위를 보내지 않은 상태에서는 큰 파일 쓰기를 거부합니다.
-실패한 읽기는 `.partial`로 남고 완료된 백업으로 취급하지 않습니다.
+저장 전에 기존 Flash 내용을 백업하지 않으므로 이 범위의 기존 데이터는 그대로 덮어써집니다.
+펌웨어는 청크를 받을 때마다 64 KiB 경계에서 블록을 삭제하고 바로 Page Program합니다.
+실패한 재읽기는 `.partial`로 남고 완료된 파일로 취급하지 않습니다.
 
 이미지를 전부 저장한 뒤 Flash에서 별도로 다시 읽어
 `pc/results/*_flash_readback.bmp`에 저장합니다.
 PC 원본과 바이트 단위 비교 및 CRC 비교가 모두 통과해야 PASS입니다.
 버퍼 A/B 전환 횟수와 버퍼 초과 횟수도 출력합니다.
-표시 시간은 저장 및 재읽기 구간이며, 백업 준비 시간은 별도입니다.
+표시 시간은 저장 및 재읽기 구간입니다.
 
 ## 작은 데이터 반복 확인
 
@@ -182,22 +181,41 @@ cmake --preset Debug && cmake --build --preset Debug
   -d build/Debug/bmp_gray_practice.elf -v -rst
 ```
 
+## 한 번에 전체 실행
+
+Serial Monitor와 VS Code 디버그 세션을 닫고 실행합니다.
+단위 테스트 → 빌드(`build/cli/`) → 다운로드 → 보드 검증 → Flash 저장 증명을 차례로 수행하며,
+실패하면 그 단계에서 멈춥니다.
+
+```sh
+./run_all.sh
+```
+
+Flash 저장 증명은 두 가지입니다.
+
+1. ST 외부 로더로 펌웨어를 거치지 않고 QSPI Flash 칩을 직접 덤프해 원본 BMP와 비교합니다.
+2. SWD로 MCU RAM 320 KB 전체를 0xA5로 덮어쓴 뒤 펌웨어를 재시작하고, Flash에서만 복원·변환합니다.
+
+이미지(3,145,782바이트)는 MCU 내부 RAM(320 KB)보다 크고, 보드의 SDRAM은 초기화하지 않으며 MPU로 막혀 있습니다.
+
 ## 보드 검증 결과 (2026-10-15)
 
-STM32F746G-DISCO(ST-LINK V2J40M27, QSPI Flash W25Q128 / JEDEC EF4018)에서 현재 소스를 빌드·다운로드한 뒤 확인했습니다.
+STM32F746G-DISCO(ST-LINK V2J40M27, QSPI Flash W25Q128 / JEDEC EF4018)에서 백업을 제거한 현재 소스를
+빌드·다운로드한 뒤 `./run_all.sh`로 확인했습니다(전체 247초).
 UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트, CRC32 978AB7D9)입니다.
 
 | 항목 | 명령 | 결과 |
 | --- | --- | --- |
-| PC 단위 테스트 | `python3 -m unittest discover -s pc -p 'test_*.py'` | 19개 PASS |
+| PC 단위 테스트 | `python3 -m unittest discover -s pc -p 'test_*.py'` | 18개 PASS |
 | C 모의 테스트 | `tests/test_uart_dma.c`, `test_uart_tx_dma.c`, `test_bmp_gray.c` | 3개 PASS |
-| 펌웨어 빌드 | CMake Debug, GCC 14.3.1 | 경고 0, FLASH 38,388 B (3.7%), RAM 35,320 B (10.8%) |
+| 펌웨어 빌드 | CMake Debug, GCC 14.3.1 | 경고 0, FLASH 38,164 B (3.6%), RAM 35,320 B (10.8%) |
 | 다운로드 | STM32_Programmer_CLI | Download verified successfully |
-| 원본 저장·복원 | `demo_roundtrip.py` | 3,145,782바이트 전체 일치, CRC32·SHA-256 일치, 버퍼 초과 0회, 87.2 s |
-| 리셋 후 복원 | `demo_roundtrip.py --read-only` | 전체 일치, 35.3 s |
-| Gray 전체 과정 | `bmp_gray.py` | Flash CRC 일치, 기준 변환과 일치, 72.4 s (백업 준비 36.1 s 별도) |
-| 리셋 후 Gray 변환 | `bmp_gray.py --convert-only` | Flash CRC 일치, 기준 변환과 일치, 20.6 s |
+| 원본 저장·복원 | `demo_roundtrip.py` | 3,145,782바이트 전체 일치, CRC32·SHA-256 일치, 버퍼 초과 0회, 86.4 s |
+| Gray 전체 과정 | `bmp_gray.py` | Flash CRC 일치, 기준 변환과 일치, 72.8 s |
 | 작은 데이터 반복 | `uart_flash_test.py --repeat 12` | 12회 모두 PASS |
+| Flash 칩 직접 덤프 | ST 외부 로더 `W25Q128JVEIQ_STM32F746G-DISCO.stldr` | `0x90000000`부터 3,145,782바이트 = 원본 BMP |
+| RAM 전체 덮어쓴 뒤 복원 | `demo_roundtrip.py --read-only` | RAM 320 KB를 0xA5로 채운 뒤에도 전체 일치, 34.6 s |
+| RAM 전체 덮어쓴 뒤 Gray 변환 | `bmp_gray.py --convert-only` | Flash CRC 일치, 기준 변환과 일치, 20.9 s |
 
 원본과 복원 BMP의 SHA-256은 `0bfd1da377908544c1b1d2c0e10f8a3b53434448786bcac53d12b27c50f1dd8c`로 같습니다.
 8비트 Gray 출력은 1,049,654바이트, CRC32 58622AEF로 이전 측정과 같습니다.

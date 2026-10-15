@@ -9,7 +9,7 @@ import sys
 import time
 import zlib
 
-from bmp_store import ROOT, BLOCK_BYTES, change_baud, dma_stats, make_test_bmp, read_flash_file, send_file, validate_bmp
+from bmp_store import ROOT, change_baud, dma_stats, make_test_bmp, read_flash_file, send_file, validate_bmp
 from uart_flash_test import SerialPort, TestError, auto_port, synchronize
 
 
@@ -40,13 +40,7 @@ def main(argv=None):
             high_baud = True
             change_baud(port, args.baud)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        backup_path = None
         store_ms = 0
-        if not args.read_only:
-            backup_path = ROOT / "backups" / f"flash_before_demo_{stamp}.bin"
-            length = (len(source) + BLOCK_BYTES - 1) & ~(BLOCK_BYTES - 1)
-            print("기존 Flash 영역 백업 중...", flush=True)
-            read_flash_file(port, length, backup_path, backup=True)
         start = time.monotonic()
         if not args.read_only: store_ms = send_file(port, source)
         destination = ROOT / "results" / f"demo_restored_{stamp}.bmp"
@@ -68,15 +62,14 @@ def main(argv=None):
                       required_flash_model="W25Q32", exact_required_chip=chip == "EF4016",
                       uart_format="8N1", baud=args.baud, spi_mode="1-1-1", spi_clock_hz=27000000,
                       dma_buffer_bytes=4096, dma_buffers=2, dma_a=a, dma_b=b, dma_overruns=overruns,
-                      store_mcu_ms=store_ms, roundtrip_and_verification_seconds=elapsed,
-                      backup=str(backup_path) if backup_path else None)
+                      store_mcu_ms=store_ms, roundtrip_and_verification_seconds=elapsed)
         report_path = ROOT / "results" / f"demo_report_{stamp}.json"
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"PASS: 원본과 복원 BMP {len(source):,}바이트 모두 일치")
         print(f"CRC32: {expected_crc:08X} = {actual_crc:08X}")
         print("SHA-256:", expected_sha)
         print(f"Double Buffer: A {a}회 / B {b}회 / 버퍼 초과 {overruns}회")
-        print(f"복원·검증까지: {elapsed:.2f} s (백업 준비 별도)")
+        print(f"복원·검증까지: {elapsed:.2f} s")
         print("복원 BMP:", destination)
         print("Demo 기록:", report_path)
         if chip != "EF4016": print("과제의 W25Q32와 실제 칩이 다릅니다. 발표에서는 W25Q128 사용을 명시하세요.")

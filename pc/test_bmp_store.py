@@ -43,10 +43,6 @@ class StoreTests(unittest.TestCase):
                 recovered.extend(chunk)
             self.assertEqual(bytes(recovered), data)
 
-    def test_backup_required_error(self):
-        with self.assertRaisesRegex(TestError, "back up"):
-            send_file(FakePort(["ERROR back up complete erase range first"]), b"a")
-
     def test_wrong_ack_fails(self):
         with self.assertRaises(TestError):
             send_file(FakePort(["FILE READY", "ACK 999"]), b"a")
@@ -55,14 +51,15 @@ class StoreTests(unittest.TestCase):
         data = bytes(range(256)) * 32
         crc = zlib.crc32(data)
         with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "backup.bin"
-            port = StreamPort([f"BACKUP {len(data)}", f"BACKUP DONE {crc:08X}"], data)
-            self.assertEqual(read_flash_file(port, len(data), destination, True), crc)
+            destination = Path(directory) / "readback.bmp"
+            port = StreamPort([f"FILE DATA {len(data)}", f"FILE DATA DONE {crc:08X}"], data)
+            self.assertEqual(read_flash_file(port, len(data), destination), crc)
+            self.assertEqual(port.writes[0], b"UFR1" + struct.pack("<I", len(data)))
             self.assertEqual(destination.read_bytes(), data)
             destination.unlink()
-            port = StreamPort([f"BACKUP {len(data)}", "BACKUP DONE 00000000"], data)
+            port = StreamPort([f"FILE DATA {len(data)}", "FILE DATA DONE 00000000"], data)
             with self.assertRaises(TestError):
-                read_flash_file(port, len(data), destination, True)
+                read_flash_file(port, len(data), destination)
             self.assertFalse(destination.exists())
 
 

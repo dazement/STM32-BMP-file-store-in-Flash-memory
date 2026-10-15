@@ -11,8 +11,8 @@ import sys
 import time
 import zlib
 
-from bmp_store import (ROOT, BLOCK_BYTES, change_baud, dma_stats, make_test_bmp,
-                       read_flash_file, send_file, validate_bmp)
+from bmp_store import (ROOT, change_baud, dma_stats, make_test_bmp, send_file,
+                       validate_bmp)
 from uart_flash_test import SerialPort, TestError, auto_port, synchronize
 
 
@@ -102,8 +102,7 @@ def read_gray(port, source, bpp, destination, reference):
 
 CSV_FIELDS = ["timestamp", "mode", "input_file", "input_bytes", "input_crc", "output_bpp",
               "output_bytes", "output_crc", "baud", "store_mcu_ms", "gray_mcu_ms",
-              "total_seconds", "backup_seconds", "with_backup_seconds", "buffer_a",
-              "buffer_b", "overruns", "output_file"]
+              "total_seconds", "buffer_a", "buffer_b", "overruns", "output_file"]
 
 
 def record_timing(path, row):
@@ -131,7 +130,6 @@ def main(argv=None):
     args = parser.parse_args(argv)
     port = None
     high_baud = False
-    backup_path = None
     try:
         if not 1 <= args.repeat <= 100:
             raise TestError("--repeat는 1~100 사이여야 합니다.")
@@ -157,16 +155,7 @@ def main(argv=None):
             order = formats if repetition % 2 == 0 else tuple(reversed(formats))
             for bpp in order:
                 print(f"\n[{repetition + 1}/{args.repeat}] {bpp}비트 Gray", flush=True)
-                backup_seconds = 0.0
                 store_ms = 0
-                preparation_start = time.monotonic()
-                if not args.convert_only:
-                    erase_length = (len(source) + BLOCK_BYTES - 1) & ~(BLOCK_BYTES - 1)
-                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                    backup_path = ROOT / "backups" / f"flash_before_gray_{stamp}.bin"
-                    print("기존 Flash 영역 백업 중...", flush=True)
-                    read_flash_file(port, erase_length, backup_path, backup=True)
-                    backup_seconds = time.monotonic() - preparation_start
                 start = time.monotonic()
                 if not args.convert_only: store_ms = send_file(port, source)
                 destination = ROOT / "results" / f"{source_path.stem}_gray{bpp}.bmp"
@@ -180,15 +169,14 @@ def main(argv=None):
                            input_file=str(source_path), input_bytes=len(source), input_crc=f"{source_crc:08X}",
                            output_bpp=bpp, output_bytes=len(references[bpp]), output_crc=f"{output_crc:08X}",
                            baud=args.baud, store_mcu_ms=store_ms, gray_mcu_ms=gray_ms,
-                           total_seconds=f"{total_seconds:.6f}", backup_seconds=f"{backup_seconds:.6f}",
-                           with_backup_seconds=f"{last_byte - preparation_start:.6f}",
+                           total_seconds=f"{total_seconds:.6f}",
                            buffer_a=a, buffer_b=b, overruns=overruns, output_file=str(destination))
                 record_timing(args.csv, row)
                 results[bpp].append(total_seconds)
                 print("PASS: Flash 원본 CRC 일치 / Gray 변환 결과 일치")
                 print(f"입력 {len(source):,}바이트 → Gray {len(references[bpp]):,}바이트")
                 label = "Flash 단독 변환" if args.convert_only else "입력 전송 시작 → Gray 마지막 바이트 수신"
-                print(f"{label}: {total_seconds:.2f} s (백업 준비 {backup_seconds:.2f} s 별도)")
+                print(f"{label}: {total_seconds:.2f} s")
                 print("Gray BMP:", destination)
         if args.repeat > 1:
             print(f"\n8비트 Gray {args.repeat}회 측정 중앙값: {statistics.median(results[8]):.2f} s")
@@ -196,7 +184,6 @@ def main(argv=None):
         return 0
     except (OSError, TestError) as exc:
         print("실패:", exc, file=sys.stderr)
-        if backup_path: print("백업 위치:", backup_path, file=sys.stderr)
         return 1
     finally:
         if port is not None:

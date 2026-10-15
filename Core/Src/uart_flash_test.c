@@ -24,7 +24,6 @@ static uint8_t magic_position;
 static uint32_t last_magic_tick;
 static const uint8_t record_magic[8] = {'U','F','T','R','E','C','0','1'};
 static uint8_t file_buffer[4096];
-static uint32_t backed_up_size;
 
 static uint32_t get_u32(const uint8_t *data)
 {
@@ -185,7 +184,7 @@ static void handle_transfer(void)
   HAL_UART_Transmit(serial, sector + PAYLOAD_OFFSET, (uint16_t)length, 2000);
 }
 
-static void stream_flash(int backup)
+static void stream_flash(void)
 {
   uint8_t request[4];
   if (UartDmaRx_Read(request, sizeof(request), 2000) != HAL_OK)
@@ -194,22 +193,18 @@ static void stream_flash(int backup)
     return;
   }
   uint32_t length = get_u32(request);
-  if (!sector_address || length == 0 || length > IMAGE_LIMIT ||
-      (backup && (length & (BLOCK_BYTES - 1U))))
+  if (!sector_address || length == 0 || length > IMAGE_LIMIT)
   {
     send_line("ERROR invalid flash read range\n");
     return;
   }
-  if (backup)
-    backed_up_size = 0;
   if (UartDmaTx_Begin(serial) != HAL_OK)
   {
     send_line("ERROR flash read TX DMA startup\n");
     return;
   }
   char line[80];
-  snprintf(line, sizeof(line), "%s %lu\n", backup ? "BACKUP" : "FILE DATA",
-           (unsigned long)length);
+  snprintf(line, sizeof(line), "FILE DATA %lu\n", (unsigned long)length);
   send_line(line);
   uint32_t crc = 0xFFFFFFFFU;
   for (uint32_t offset = 0; offset < length; offset += sizeof(file_buffer))
@@ -221,7 +216,7 @@ static void stream_flash(int backup)
         UartDmaTx_Write(file_buffer, count) != HAL_OK)
     {
       UartDmaTx_Abort();
-      return; /* No successful trailer or backup authorization on failure. */
+      return; /* No successful trailer on failure. */
     }
     crc = crc32_update(crc, file_buffer, count);
   }
@@ -230,11 +225,9 @@ static void stream_flash(int backup)
     UartDmaTx_Abort();
     return;
   }
-  snprintf(line, sizeof(line), "%s DONE %08lX\n", backup ? "BACKUP" : "FILE DATA",
+  snprintf(line, sizeof(line), "FILE DATA DONE %08lX\n",
            (unsigned long)(crc ^ 0xFFFFFFFFU));
   send_line(line);
-  if (backup)
-    backed_up_size = length;
 }
 
 static void receive_file(void)
@@ -252,13 +245,6 @@ static void receive_file(void)
     send_line("ERROR invalid file size or flash ID\n");
     return;
   }
-  uint32_t erase_length = (length + BLOCK_BYTES - 1U) & ~(BLOCK_BYTES - 1U);
-  if (backed_up_size < erase_length)
-  {
-    send_line("ERROR back up complete erase range first\n");
-    return;
-  }
-  backed_up_size = 0;
   send_line("FILE READY\n");
   uint32_t start = HAL_GetTick();
   uint32_t crc = 0xFFFFFFFFU;
@@ -421,7 +407,7 @@ void UartFlashTest_Poll(void)
   else if (magic_position == 2)
   {
     operation = byte;
-    magic_position = (byte == 'T' || byte == 'B' || byte == 'L' || byte == 'R' ||
+    magic_position = (byte == 'T' || byte == 'L' || byte == 'R' ||
                       byte == 'S' || byte == 'G') ? 3 : 0;
   }
   else
@@ -431,8 +417,7 @@ void UartFlashTest_Poll(void)
   {
     magic_position = 0;
     if (operation == 'T') handle_transfer();
-    else if (operation == 'B') stream_flash(1);
-    else if (operation == 'R') stream_flash(0);
+    else if (operation == 'R') stream_flash();
     else if (operation == 'S') change_baud();
     else if (operation == 'G') send_gray();
     else receive_file();
