@@ -191,23 +191,6 @@ Run and Debug로 실행하고 Continue를 누른 뒤, **STM32Cube Live Watch**(�
 세미호스팅 `printf`는 출력할 때마다 CPU를 멈추므로 고속 전송 중 확인에는 쓰지 않습니다.
 CPU가 `WFI`로 잠든 동안에도 디버거 연결이 유지되도록 `main.c`에서 `HAL_DBGMCU_EnableDBGSleepMode()`를 호출합니다.
 
-## 보드 LCD 표시 (테스트)
-
-부팅할 때 Flash 0번지에 저장된 24비트 BMP를 Gray로 바꿔 보드 LCD(4.3", 480×272)에 띄웁니다.
-변환식은 UART Gray 출력과 같고, 비율을 유지해 화면에 맞게 축소합니다(1024×1024 → 가운데 272×272).
-저장된 BMP가 없으면 회색 그라데이션을 띄워 화면만 점검합니다.
-
-- 새 이미지를 저장한 뒤 **파란 USER 버튼**을 누르면 다시 그립니다. 검은 RESET 버튼으로 다시 부팅해도 됩니다.
-- 예: `python3 pc/demo_roundtrip.py --in pc/images/earth_apollo17_1024x1024.bmp` 실행 후 USER 버튼.
-- 그리는 데 약 1초 걸립니다. 그동안 PC가 보낸 명령은 UART DMA가 받아 두었다가 처리합니다.
-- 디버그 로그(`debug_log`)에 `LCD: 1024x1024 BMP as 272x272 gray, … ms` 줄이 남습니다.
-
-구현은 `Core/Src/lcd_test.c` 한 파일입니다. CubeMX에서 LTDC를 켜지 않았으므로 LTDC는 레지스터로 직접 설정하며,
-`.ioc`와 `stm32f7xx_hal_conf.h`는 바꾸지 않습니다. 패널 타이밍(9.6 MHz 픽셀 클럭)과 핀은 ST의 STM32746G-Discovery BSP와 같습니다.
-화면 형식은 L8(픽셀당 8비트 색인 + 256단계 회색 팔레트)이라 프레임 버퍼가 130,560바이트로 내부 SRAM에 들어갑니다.
-SDRAM은 계속 쓰지 않고 MPU로 막혀 있으며, 프레임 버퍼에는 축소본만 있으므로 MCU가 전체 이미지를 RAM에 보관하지 않는다는 조건도 그대로입니다.
-끄려면 `main.c` USER CODE 블록의 `LcdTest_` 호출을 지웁니다.
-
 ## 작은 데이터 반복 확인
 
 ```sh
