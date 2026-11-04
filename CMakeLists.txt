@@ -52,6 +52,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/bmp_gray.c
     Core/Src/gray_flash.c
     Core/Src/debug_log.c
+    Core/Src/lcd_test.c
 )
 
 # Add include paths

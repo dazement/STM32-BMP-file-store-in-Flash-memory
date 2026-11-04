@@ -25,6 +25,7 @@
 #include <string.h>
 #include "flash_test.h"
 #include "uart_flash_test.h"
+#include "lcd_test.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -154,6 +155,10 @@ int main(void)
   HAL_Delay(10);
   Flash_ReadJedecId(jedec);
   UartFlashTest_Init(&hqspi, &huart1, jedec);
+  /* Board LCD test: gray preview of the BMP in Flash; USER button redraws.
+     Reception is already running, so PC bytes sent meanwhile are kept. */
+  if (LcdTest_Init() == HAL_OK)
+    LcdTest_ShowFlashBmp(&hqspi);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -164,6 +169,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     UartFlashTest_Poll();
+    LcdTest_Poll(&hqspi);
   }
   /* USER CODE END 3 */
 }
