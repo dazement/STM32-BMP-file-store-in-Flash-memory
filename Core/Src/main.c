@@ -148,6 +148,8 @@ int main(void)
   MX_USART1_UART_Init();
   MX_QUADSPI_Init();
   /* USER CODE BEGIN 2 */
+  /* UART waits sleep in WFI; keep the debugger (Live Watch) attached then. */
+  HAL_DBGMCU_EnableDBGSleepMode();
   uint8_t jedec[3] = {0};
   HAL_Delay(10);
   Flash_ReadJedecId(jedec);

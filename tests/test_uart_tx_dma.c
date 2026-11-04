@@ -35,9 +35,10 @@ HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *handle)
   return HAL_OK;
 }
 uint32_t HAL_GetTick(void) { return tick; }
-void HAL_Delay(uint32_t milliseconds)
+/* WFI: one SysTick passes, and the TX complete IRQ fires if DMA finished. */
+void __WFI(void)
 {
-  tick += milliseconds;
+  ++tick;
   if (pending && auto_complete) complete();
 }
 int main(void)

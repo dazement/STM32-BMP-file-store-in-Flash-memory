@@ -3,6 +3,7 @@
 STM32F746G-DISCO의 USART1과 보드 내장 QUADSPI Flash를 사용합니다.
 현재 단계는 **3 MiB 이상의 24비트 BMP 전체 저장 → Flash 재읽기 → Gray BMP 변환 → PC 수신**입니다.
 UART RX는 하드웨어 Double Buffer, Gray 출력 TX는 DMA 이중 버퍼를 사용합니다.
+수신 데이터 도착은 인터럽트(DMA HT·TC, USART IDLE)가 알려 주며, 기다리는 동안 CPU는 `WFI`로 잠듭니다.
 
 ## 준비 (macOS · Windows)
 
@@ -78,6 +79,8 @@ USART1 global interrupt, DMA2 stream2 global interrupt, DMA2 stream7 global inte
 
 - USART1_RX DMA는 반드시 Circular여야 합니다. `UartDmaRx_Start()`는 Circular가 아니면 `HAL_ERROR`를 반환합니다.
   Double Buffer 모드는 CubeMX 항목이 아니며 펌웨어가 `HAL_DMAEx_MultiBufferStart_IT()`로 실행 중에 켭니다.
+- USART IDLE 인터럽트도 CubeMX 항목이 아닙니다. `UartDmaRx_Start()`가 켜고,
+  `stm32f7xx_it.c`의 `USER CODE BEGIN USART1_IRQn 0` 블록에서 `UartDmaRx_UartIrqHandler()`가 처리합니다.
 - 115200은 부팅 시 속도입니다. 921600·2250000은 PC 요청으로 펌웨어가 실행 중에 바꿉니다.
 - CubeMX 기본 MPU Region 0은 0x60000000–0xDFFFFFFF 접근을 막습니다.
   QUADSPI 레지스터(0xA0001000)를 여는 Region 1은 `main.c`의 `USER CODE BEGIN SysInit` 블록에 있으므로 재생성해도 유지됩니다.
@@ -145,8 +148,13 @@ python3 pc/bmp_store.py
 - DMA2 Stream2 Channel4, 하드웨어 DBM, M0/M1 각각 4096바이트.
 - PC는 CRC가 붙은 청크를 최대 두 개까지 미리 전송합니다.
 - DMA가 B를 채우는 동안 A에서 복사한 청크를 Flash에 저장할 수 있습니다.
-- CT, NDTR, 완료 콜백으로 수신 위치와 버퍼 재사용을 추적합니다.
-- 부분 버퍼도 읽을 수 있어 짧은 명령이나 마지막 청크가 대기하지 않습니다.
+- 수신 위치는 인터럽트만 갱신합니다. 뱅크 완료(TC), 뱅크 절반(HT), 회선 유휴(USART IDLE)
+  인터럽트가 CT·NDTR로 계산한 위치를 알리고, `UartDmaRx_Read()`는 알려진 만큼만 복사합니다.
+- 읽을 데이터가 없으면 `UartDmaRx_Read()`는 DMA 카운터를 반복해서 읽지 않고 `WFI`로 잠듭니다.
+  다음 인터럽트가 CPU를 깨우며, 1 ms SysTick 인터럽트는 시간 초과 계산에만 쓰입니다.
+- 짧은 명령이나 마지막 청크처럼 뱅크 절반보다 작은 데이터는 송신 측이 멈추는 순간의 IDLE 인터럽트로 알려집니다.
+- 복사 직후에는 DMA 하드웨어 위치를 다시 확인해, 복사 중 덮어쓴 데이터는 받아들이지 않습니다.
+- TX도 DMA 완료 인터럽트를 `WFI`로 기다립니다.
 - 현재 D-cache는 비활성화되어 있습니다. 활성화하려면 DMA 메모리의 캐시 정책을 함께 설정해야 합니다.
 - 64 KiB 블록 삭제, 256바이트 Page Program, BUSY/WEL 확인을 사용합니다.
 
@@ -161,6 +169,27 @@ python3 pc/bmp_store.py
 PC 원본과 바이트 단위 비교 및 CRC 비교가 모두 통과해야 PASS입니다.
 버퍼 A/B 전환 횟수와 버퍼 초과 횟수도 출력합니다.
 표시 시간은 저장 및 재읽기 구간입니다.
+
+## IDE 디버그 확인
+
+PC 프로그램 결과와 별도로 MCU 쪽 상태를 VS Code 디버거에서 확인할 수 있습니다.
+Run and Debug로 실행하고 Continue를 누른 뒤, **STM32Cube Live Watch**(한국어 UI: STM32Cube 실시간 감시) 창에
+아래 식을 추가합니다. Live Watch는 프로그램을 멈추지 않고 RAM을 읽으므로 921600 baud 전송 중에도 쓸 수 있습니다.
+
+| 식 | 내용 |
+| --- | --- |
+| `uart_rx_debug` | 인터럽트가 알린 수신 바이트, 뱅크 A/B 완료(TC)·절반(HT)·IDLE 횟수, WFI 대기 횟수, 버퍼 초과, UART 오류(PE·FE·NE·ORE) |
+| `debug_log` | 최근 32줄 로그. MCU가 PC로 보낸 응답 줄과 명령마다 남기는 수신 상태 요약 |
+| `debug_log_lines` | 지금까지 쓴 로그 줄 수. 가장 최근 줄은 `debug_log[(debug_log_lines - 1) % 32]` |
+
+로그 한 줄은 `<HAL tick ms> <내용>` 형식입니다. 명령이 끝날 때마다 `CMD UFL1` 같은 명령 이름과 응답 줄 뒤에
+`RX <받은 바이트> B A<뱅크 A 완료> B<뱅크 B 완료> ovr<버퍼 초과> PE<패리티> FE<프레이밍> NE<노이즈> ORE<오버런>`
+형식의 요약이 남습니다.
+921600 baud 전송 뒤에도 FE(프레이밍)·NE(노이즈)·ORE(오버런)가 0이면 MCU 쪽에서 본 수신도 깨지지 않은 것입니다.
+수신 이벤트 카운터는 수신을 다시 시작할 때(속도 변경, 오류 복구) 0이 되고, 오류 카운터는 리셋 전까지 유지됩니다.
+
+세미호스팅 `printf`는 출력할 때마다 CPU를 멈추므로 고속 전송 중 확인에는 쓰지 않습니다.
+CPU가 `WFI`로 잠든 동안에도 디버거 연결이 유지되도록 `main.c`에서 `HAL_DBGMCU_EnableDBGSleepMode()`를 호출합니다.
 
 ## 작은 데이터 반복 확인
 
@@ -182,6 +211,7 @@ python3 -m unittest discover -s pc -p "test_*.py" -v
 
 아래 C 모의 검사 명령은 macOS 기준입니다. Windows에서는 `py run_all.py`가 `gcc`나 `clang`을 찾아 같은 검사를 실행합니다.
 DBM 소비자 검사는 생산 코드에 모의 DMA 레지스터를 연결하여
+인터럽트가 알리기 전의 데이터는 읽지 않는지, `WFI` 대기 중 인터럽트로 깨어나 이어 읽는지,
 A/B 전환, 부분 수신, 지연된 IRQ, 덮어쓰기 감지와 오류 복구를 확인합니다.
 
 ```sh
@@ -235,6 +265,18 @@ Flash 저장 증명은 두 가지입니다.
 이미지(3,145,782바이트)는 MCU 내부 RAM(320 KB)보다 크고, 보드의 SDRAM은 초기화하지 않으며 MPU로 막혀 있습니다.
 
 ## 보드 검증 결과 (2026-10-15)
+
+아래 표는 수신 대기를 인터럽트·`WFI` 방식으로 바꾸기 전(`HAL_Delay(1)` 반복 확인) 펌웨어 기준입니다.
+2026-11-04에 인터럽트 방식 펌웨어로 `run_all.py` 9단계를 다시 모두 통과했습니다(921600 baud).
+
+| 항목 | 10-15 (폴링) | 11-04 (인터럽트) |
+| --- | --- | --- |
+| 원본 저장·복원 `demo_roundtrip.py` | 86.5 s | 86.3 s, 전체 일치, 버퍼 초과 0회 |
+| Gray 전체 과정 `bmp_gray.py` | 72.8 s | 72.7 s, 출력 CRC32 58622AEF 동일 |
+| Gray 변환 MCU 시간 | 20.9 s | 20.5 s |
+| RAM 전체 덮어쓴 뒤 복원 `--read-only` | 34.6 s | 34.1 s, 전체 일치 |
+
+11-04 측정 기록은 `pc/results/demo_report_20261104_*.json`과 `pc/results/timings.csv`에 있습니다.
 
 STM32F746G-DISCO(ST-LINK V2J40M27, QSPI Flash W25Q128 / JEDEC EF4018)에서 백업을 제거한 현재 소스를
 빌드·다운로드한 뒤 `run_all.py`로 확인했습니다(전체 약 4분).

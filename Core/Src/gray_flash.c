@@ -2,6 +2,7 @@
 #include "bmp_gray.h"
 #include "flash_test.h"
 #include "uart_dma_tx.h"
+#include "debug_log.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -12,6 +13,7 @@ static uint8_t output_header[1078];
 
 static void send_line(UART_HandleTypeDef *uart, const char *line)
 {
+  DebugLog_Write(line);
   HAL_UART_Transmit(uart, (uint8_t *)line, (uint16_t)strlen(line), 1000);
 }
 

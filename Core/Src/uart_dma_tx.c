@@ -15,7 +15,16 @@ static HAL_StatusTypeDef wait_tx(void)
   {
     if (tx_error) return HAL_ERROR;
     if ((uint32_t)(HAL_GetTick() - start) >= 3000U) return HAL_TIMEOUT;
-    HAL_Delay(1);
+    /* The TX complete interrupt clears tx_busy. Sleep until an interrupt;
+       PRIMASK keeps one that arrives after the check pending for WFI. */
+    uint32_t irq_state = __get_PRIMASK();
+    __disable_irq();
+    if (tx_busy && !tx_error)
+    {
+      __WFI();
+      __NOP(); __NOP(); __NOP();  /* same errata workaround as uart_dma_rx.c */
+    }
+    __set_PRIMASK(irq_state);
   }
   return tx_error ? HAL_ERROR : HAL_OK;
 }

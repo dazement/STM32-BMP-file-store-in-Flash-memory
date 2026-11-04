@@ -11,10 +11,11 @@ static uint8_t buffer_a[BANK_BYTES] __attribute__((aligned(32)));
 static uint8_t buffer_b[BANK_BYTES] __attribute__((aligned(32)));
 static UART_HandleTypeDef *rx_uart;
 static volatile uint32_t completed_blocks;
-static volatile uint32_t bank_completions[2];
-static volatile uint32_t overrun_count;
 static volatile uint32_t rx_error;
+/* Bytes the DMA has delivered. Only the receive interrupts write it. */
+static volatile uint32_t received;
 static uint32_t consumed;
+volatile UartDmaRxDebug uart_rx_debug;
 
 static uint32_t produced_count(void)
 {
@@ -39,12 +40,20 @@ static uint32_t produced_count(void)
   else if (pending && remaining != 0)
   {
     rx_error = 1;
-    ++overrun_count;
+    ++uart_rx_debug.overruns;
   }
   uint32_t result = blocks * BANK_BYTES + BANK_BYTES - remaining;
   __DMB();
   __set_PRIMASK(irq_state);
   return result;
+}
+
+/* Every receive interrupt announces the DMA write position: bank full (TC),
+   bank half full (HT) and line idle (IDLE, for data shorter than that). */
+static void publish(void)
+{
+  received = produced_count();
+  uart_rx_debug.received = received;
 }
 
 static void bank_complete(DMA_HandleTypeDef *dma, uint32_t bank)
@@ -54,14 +63,23 @@ static void bank_complete(DMA_HandleTypeDef *dma, uint32_t bank)
   if (bank != (completed_blocks & 1U))
   {
     rx_error = 1;
-    ++overrun_count;
+    ++uart_rx_debug.overruns;
   }
   ++completed_blocks;
-  ++bank_completions[bank];
+  ++uart_rx_debug.bank_full[bank];
+  publish();
 }
 
 static void bank_a_complete(DMA_HandleTypeDef *dma) { bank_complete(dma, 0); }
 static void bank_b_complete(DMA_HandleTypeDef *dma) { bank_complete(dma, 1); }
+
+static void bank_half(DMA_HandleTypeDef *dma)
+{
+  if (rx_uart == NULL || dma != rx_uart->hdmarx)
+    return;
+  ++uart_rx_debug.half_full;
+  publish();
+}
 
 static void dma_error(DMA_HandleTypeDef *dma)
 {
@@ -73,20 +91,38 @@ static void dma_error(DMA_HandleTypeDef *dma)
   }
 }
 
+/* Called from USART1_IRQHandler before HAL_UART_IRQHandler. HAL leaves IDLE
+   alone during standard reception, so an uncleared flag would re-enter. */
+void UartDmaRx_UartIrqHandler(UART_HandleTypeDef *uart)
+{
+  if (uart != rx_uart || !__HAL_UART_GET_FLAG(uart, UART_FLAG_IDLE))
+    return;
+  __HAL_UART_CLEAR_IDLEFLAG(uart);
+  if (READ_BIT(uart->Instance->CR1, USART_CR1_IDLEIE) == 0U)
+    return;
+  ++uart_rx_debug.line_idle;
+  publish();
+}
+
 HAL_StatusTypeDef UartDmaRx_Start(UART_HandleTypeDef *uart)
 {
   if (uart == NULL || uart->hdmarx == NULL ||
       uart->hdmarx->Init.Mode != DMA_CIRCULAR)
     return HAL_ERROR;
+  /* No IDLE interrupt may publish a stale position during the restart. */
+  ATOMIC_CLEAR_BIT(uart->Instance->CR1, USART_CR1_IDLEIE);
   HAL_StatusTypeDef status = HAL_UART_AbortReceive(uart);
   if (status != HAL_OK)
     return status;
   __HAL_UART_CLEAR_OREFLAG(uart);
   rx_uart = uart;
   completed_blocks = 0;
-  bank_completions[0] = bank_completions[1] = 0;
+  received = 0;
   consumed = 0;
   rx_error = 0;
+  uart_rx_debug.received = 0;
+  uart_rx_debug.bank_full[0] = uart_rx_debug.bank_full[1] = 0;
+  uart_rx_debug.half_full = uart_rx_debug.line_idle = uart_rx_debug.sleeps = 0;
   /* HAL_UART_Receive_DMA supports only one memory address. Set up the UART
      receive state as ST's helper does, then use the DMA multibuffer API. */
   uart->pRxBuffPtr = buffer_a;
@@ -98,8 +134,9 @@ HAL_StatusTypeDef UartDmaRx_Start(UART_HandleTypeDef *uart)
   DMA_HandleTypeDef *dma = uart->hdmarx;
   dma->XferCpltCallback = bank_a_complete;
   dma->XferM1CpltCallback = bank_b_complete;
-  dma->XferHalfCpltCallback = NULL;
-  dma->XferM1HalfCpltCallback = NULL;
+  /* Non-NULL half callbacks make HAL enable the HT interrupt. */
+  dma->XferHalfCpltCallback = bank_half;
+  dma->XferM1HalfCpltCallback = bank_half;
   dma->XferErrorCallback = dma_error;
   dma->XferAbortCallback = NULL;
   CLEAR_BIT(dma->Instance->CR, DMA_SxCR_CT);
@@ -117,7 +154,26 @@ HAL_StatusTypeDef UartDmaRx_Start(UART_HandleTypeDef *uart)
   if (uart->Init.Parity != UART_PARITY_NONE)
     ATOMIC_SET_BIT(uart->Instance->CR1, USART_CR1_PEIE);
   ATOMIC_SET_BIT(uart->Instance->CR3, USART_CR3_EIE | USART_CR3_DMAR);
+  /* A stale IDLE flag only causes one harmless extra announcement. */
+  ATOMIC_SET_BIT(uart->Instance->CR1, USART_CR1_IDLEIE);
   return status;
+}
+
+/* Sleep until an interrupt. With PRIMASK set, an interrupt that arrives after
+   the check stays pending and WFI returns at once, so no wakeup is lost. */
+static void wait_for_data(void)
+{
+  uint32_t irq_state = __get_PRIMASK();
+  __disable_irq();
+  if (received == consumed && !rx_error)
+  {
+    ++uart_rx_debug.sleeps;
+    __WFI();
+    /* Workaround from ST's STM32F4 errata for waking from debug Sleep with
+       Flash wait states and prefetch off, both true in this project. */
+    __NOP(); __NOP(); __NOP();
+  }
+  __set_PRIMASK(irq_state);
 }
 
 HAL_StatusTypeDef UartDmaRx_Read(uint8_t *data, uint32_t count, uint32_t timeout_ms)
@@ -128,13 +184,12 @@ HAL_StatusTypeDef UartDmaRx_Read(uint8_t *data, uint32_t count, uint32_t timeout
   {
     if (rx_uart == NULL || rx_error)
       return HAL_ERROR;
-    uint32_t available = produced_count() - consumed;
-    if (rx_error)
-      return HAL_ERROR;
+    /* Only the receive interrupts advance 'received'; DMA is not polled. */
+    uint32_t available = received - consumed;
     if (available > TOTAL_BYTES)
     {
       rx_error = 1;
-      ++overrun_count;
+      ++uart_rx_debug.overruns;
       return HAL_ERROR;
     }
     if (available)
@@ -148,11 +203,12 @@ HAL_StatusTypeDef UartDmaRx_Read(uint8_t *data, uint32_t count, uint32_t timeout
         amount = BANK_BYTES - index;
       const uint8_t *source = bank == 0 ? buffer_a : buffer_b;
       memcpy(data + copied, source + index, amount);
-      /* Fail rather than accept a copy that DMA may have overwritten. */
+      /* Fail rather than accept a copy that DMA may have overwritten. The
+         announced count can trail the DMA, so check the hardware position. */
       if (produced_count() - consumed > TOTAL_BYTES)
       {
         rx_error = 1;
-        ++overrun_count;
+        ++uart_rx_debug.overruns;
         return HAL_ERROR;
       }
       if (rx_error)
@@ -161,9 +217,10 @@ HAL_StatusTypeDef UartDmaRx_Read(uint8_t *data, uint32_t count, uint32_t timeout
       copied += amount;
       continue;
     }
+    /* SysTick also wakes the CPU every 1 ms, which drives this timeout. */
     if ((uint32_t)(HAL_GetTick() - start) >= timeout_ms)
       return HAL_TIMEOUT;
-    HAL_Delay(1);
+    wait_for_data();
   }
   return HAL_OK;
 }
@@ -172,15 +229,21 @@ void UartDmaRx_GetStats(uint32_t *a, uint32_t *b, uint32_t *overruns)
 {
   uint32_t state = __get_PRIMASK();
   __disable_irq();
-  *a = bank_completions[0];
-  *b = bank_completions[1];
-  *overruns = overrun_count;
+  *a = uart_rx_debug.bank_full[0];
+  *b = uart_rx_debug.bank_full[1];
+  *overruns = uart_rx_debug.overruns;
   __set_PRIMASK(state);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
 {
   UartDmaTx_NotifyError(uart);
-  if (uart == rx_uart)
-    rx_error = 1;
+  if (uart != rx_uart)
+    return;
+  rx_error = 1;
+  uint32_t code = uart->ErrorCode;
+  if (code & HAL_UART_ERROR_PE) ++uart_rx_debug.parity_errors;
+  if (code & HAL_UART_ERROR_NE) ++uart_rx_debug.noise_errors;
+  if (code & HAL_UART_ERROR_FE) ++uart_rx_debug.framing_errors;
+  if (code & HAL_UART_ERROR_ORE) ++uart_rx_debug.overrun_errors;
 }

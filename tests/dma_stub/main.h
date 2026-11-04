@@ -9,7 +9,7 @@ typedef struct DMA_HandleTypeDef DMA_HandleTypeDef;
 struct DMA_HandleTypeDef {
   DMA_InitTypeDef Init;
   DMA_Stream_TypeDef *Instance;
-  uint32_t tc_flag;
+  uint32_t tc_flag, ht_flag;
   void (*XferCpltCallback)(DMA_HandleTypeDef *);
   void (*XferM1CpltCallback)(DMA_HandleTypeDef *);
   void (*XferHalfCpltCallback)(DMA_HandleTypeDef *);
@@ -17,7 +17,7 @@ struct DMA_HandleTypeDef {
   void (*XferErrorCallback)(DMA_HandleTypeDef *);
   void (*XferAbortCallback)(DMA_HandleTypeDef *);
 };
-typedef struct { uint32_t CR1, CR3, RDR; } USART_TypeDef;
+typedef struct { uint32_t CR1, CR3, RDR, ISR; } USART_TypeDef;
 typedef struct {
   DMA_HandleTypeDef *hdmarx;
   DMA_HandleTypeDef *hdmatx;
@@ -31,15 +31,23 @@ typedef struct {
 #define DMA_SxCR_CT (1U << 19)
 #define DMA_SxCR_DBM (1U << 18)
 #define UART_PARITY_NONE 0U
+#define USART_CR1_IDLEIE (1U << 4)
 #define USART_CR1_PEIE (1U << 8)
 #define USART_CR3_EIE 1U
 #define USART_CR3_DMAR (1U << 6)
+#define USART_ISR_IDLE (1U << 4)
+#define UART_FLAG_IDLE USART_ISR_IDLE
 #define HAL_UART_ERROR_NONE 0U
+#define HAL_UART_ERROR_PE 1U
+#define HAL_UART_ERROR_NE 2U
+#define HAL_UART_ERROR_FE 4U
+#define HAL_UART_ERROR_ORE 8U
 #define HAL_UART_ERROR_DMA 16U
 #define HAL_UART_RECEPTION_STANDARD 0U
 #define HAL_UART_STATE_BUSY_RX 34U
 #define HAL_UART_STATE_BUSY_TX 33U
 #define HAL_UART_STATE_READY 32U
+#define READ_BIT(reg, bits) ((reg) & (bits))
 #define CLEAR_BIT(reg, bits) ((reg) &= ~(bits))
 #define ATOMIC_CLEAR_BIT(reg, bits) CLEAR_BIT(reg, bits)
 #define ATOMIC_SET_BIT(reg, bits) ((reg) |= (bits))
@@ -47,10 +55,15 @@ typedef struct {
 #define __HAL_DMA_GET_FLAG(dma, flag) ((void)(flag), (dma)->tc_flag)
 #define __HAL_DMA_GET_COUNTER(dma) ((dma)->Instance->NDTR)
 #define __HAL_UART_CLEAR_OREFLAG(uart) ((void)(uart))
+#define __HAL_UART_GET_FLAG(uart, flag) (((uart)->Instance->ISR & (flag)) == (flag))
+#define __HAL_UART_CLEAR_IDLEFLAG(uart) ((uart)->Instance->ISR &= ~USART_ISR_IDLE)
 static inline uint32_t __get_PRIMASK(void) { return 0; }
 static inline void __disable_irq(void) {}
 static inline void __set_PRIMASK(uint32_t state) { (void)state; }
 static inline void __DMB(void) {}
+static inline void __NOP(void) {}
+/* Each test supplies WFI: one SysTick plus whatever interrupts it emulates. */
+void __WFI(void);
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *uart);
 HAL_StatusTypeDef HAL_DMAEx_MultiBufferStart_IT(DMA_HandleTypeDef *dma, uint32_t source,
                                                uint32_t first, uint32_t second, uint32_t size);

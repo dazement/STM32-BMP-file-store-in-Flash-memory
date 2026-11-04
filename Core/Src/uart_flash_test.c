@@ -4,6 +4,7 @@
 #include "bmp_gray.h"
 #include "gray_flash.h"
 #include "uart_dma_tx.h"
+#include "debug_log.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -49,7 +50,22 @@ static uint32_t crc32(const uint8_t *data, uint32_t count)
 
 static void send_line(const char *line)
 {
+  DebugLog_Write(line);
   HAL_UART_Transmit(serial, (uint8_t *)line, (uint16_t)strlen(line), 1000);
+}
+
+/* Reception health after each command, for the debugger's log view. */
+static void log_rx_health(void)
+{
+  DebugLog_Printf("RX %lu B A%lu B%lu ovr%lu PE%lu FE%lu NE%lu ORE%lu",
+                  (unsigned long)uart_rx_debug.received,
+                  (unsigned long)uart_rx_debug.bank_full[0],
+                  (unsigned long)uart_rx_debug.bank_full[1],
+                  (unsigned long)uart_rx_debug.overruns,
+                  (unsigned long)uart_rx_debug.parity_errors,
+                  (unsigned long)uart_rx_debug.framing_errors,
+                  (unsigned long)uart_rx_debug.noise_errors,
+                  (unsigned long)uart_rx_debug.overrun_errors);
 }
 
 static int all_ff(const uint8_t *data, uint32_t count)
@@ -372,6 +388,8 @@ void UartFlashTest_Poll(void)
   {
     if (status != HAL_TIMEOUT)
     {
+      log_rx_health();
+      DebugLog_Write("RX error: restarting reception");
       UartDmaRx_Start(serial);
       magic_position = 0;
     }
@@ -416,10 +434,12 @@ void UartFlashTest_Poll(void)
   if (magic_position == 4)
   {
     magic_position = 0;
+    DebugLog_Printf("CMD UF%c1", (char)operation);
     if (operation == 'T') handle_transfer();
     else if (operation == 'R') stream_flash();
     else if (operation == 'S') change_baud();
     else if (operation == 'G') send_gray();
     else receive_file();
+    log_rx_health();
   }
 }
