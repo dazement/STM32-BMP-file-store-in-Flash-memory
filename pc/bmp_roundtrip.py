@@ -9,8 +9,9 @@ import sys
 import time
 import zlib
 
-from bmp_store import ROOT, change_baud, dma_stats, make_test_bmp, read_flash_file, send_file, validate_bmp
-from uart_flash_test import TestError, auto_port, open_port, synchronize
+from bmp_image import ROOT, make_test_bmp, validate_bmp
+from board import (TestError, auto_port, change_baud, dma_stats, open_port, read_flash_file,
+                   send_file, synchronize)
 
 
 def main(argv=None):

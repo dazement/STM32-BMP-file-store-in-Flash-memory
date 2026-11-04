@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
-"""Small UART -> flash -> UART check.
+"""Serial link to the board and the PC side of every UART command.
 
 macOS/Linux need only the standard library (termios). Windows needs pyserial;
 when pyserial is installed it is used on every OS.
 """
-
-import argparse
+from collections import deque
 import glob
 import os
 import select
@@ -226,43 +224,136 @@ def transfer(port, payload):
     return storage_ms, time.monotonic() - start
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description="PC → UART → Flash → UART → PC 테스트")
-    parser.add_argument("--port", help="생략하면 연결된 STM32 포트를 자동 선택")
-    parser.add_argument("--size", type=int, default=1024, help="1~1024, 기본 1024바이트")
-    parser.add_argument("--repeat", type=int, default=1, help="반복 횟수, DMA 버퍼 순환 검증은 12회 권장")
-    args = parser.parse_args(argv)
-    port = None
+CHUNK_BYTES = 4096
+
+
+def change_baud(port, baud):
+    port.write_all(b"UFS1" + struct.pack("<I", baud))
+    line = port.read_line()
+    if line != f"BAUD {baud}":
+        raise TestError("속도 변경 실패: " + line)
+    port.set_baud(baud)
+    time.sleep(0.08)
+    synchronize(port)
+
+
+def read_flash_file(port, length, destination):
+    port.write_all(b"UFR1" + struct.pack("<I", length))
+    line = port.read_line()
+    if line != f"FILE DATA {length}":
+        raise TestError("MCU: " + line)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_name(destination.name + ".partial")
+    crc = 0
+    done = 0
+    last_percent = -1
+    with partial.open("wb") as output:
+        while done < length:
+            chunk = port.read_exact(min(CHUNK_BYTES, length - done))
+            output.write(chunk)
+            crc = zlib.crc32(chunk, crc)
+            done += len(chunk)
+            percent = done * 100 // length
+            if percent // 10 != last_percent // 10:
+                print(f"  Flash 재읽기: {percent}%", flush=True)
+                last_percent = percent
+        line = port.read_line()
+        if line != f"FILE DATA DONE {crc & 0xFFFFFFFF:08X}":
+            raise TestError("Flash 읽기 CRC가 다릅니다: " + line)
+        output.flush()
+        os.fsync(output.fileno())
+    partial.replace(destination)
+    return crc & 0xFFFFFFFF
+
+
+def send_file(port, data):
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    port.write_all(b"UFL1" + struct.pack("<II", len(data), crc))
+    line = port.read_line()
+    if line != "FILE READY":
+        raise TestError("MCU: " + line)
+    pending = deque()
+    sent = 0
+    last_percent = -1
+    while sent < len(data) or pending:
+        # Two chunks in flight: receive buffer B can fill while A is stored.
+        while sent < len(data) and len(pending) < 2:
+            chunk = data[sent:sent + CHUNK_BYTES]
+            port.write_all(struct.pack("<I", zlib.crc32(chunk) & 0xFFFFFFFF) + chunk)
+            sent += len(chunk)
+            pending.append(sent)
+        line = port.read_line(timeout=8)
+        expected = pending.popleft()
+        if line != f"ACK {expected}":
+            raise TestError("MCU 저장 응답 오류: " + line)
+        percent = expected * 100 // len(data)
+        if percent // 10 != last_percent // 10:
+            print(f"  BMP 저장: {percent}%", flush=True)
+            last_percent = percent
+    line = port.read_line()
+    fields = line.split()
+    if len(fields) != 5 or fields[:2] != ["FILE", "STORED"]:
+        raise TestError("파일 저장 실패: " + line)
     try:
-        if not 1 <= args.size <= 1024:
-            raise TestError("--size는 1~1024 사이여야 합니다.")
-        if not 1 <= args.repeat <= 1000:
-            raise TestError("--repeat는 1~1000 사이여야 합니다.")
-        path = args.port or auto_port()
-        print("연결:", path, "(115200 baud)", flush=True)
-        port = open_port(path)
-        chip_id = synchronize(port)
-        print("Flash ID:", chip_id, flush=True)
-        if port.rx_mode != "DBM":
-            raise TestError("새 Double Buffer 펌웨어를 다운로드하고 ▶ Continue를 누르세요.")
-        print("UART 수신: Double Buffer (4 KiB × 2)", flush=True)
-        total_seconds = 0.0
-        for run in range(args.repeat):
-            payload = bytes((i * 73 + 19 + run * 11) & 0xFF for i in range(args.size))
-            storage_ms, elapsed = transfer(port, payload)
-            total_seconds += elapsed
-            print(f"[{run + 1}/{args.repeat}] PASS: {len(payload):,}바이트 모두 일치 "
-                  f"(Flash {storage_ms} ms / 전체 {elapsed:.3f} s)", flush=True)
-        print(f"PASS: UART DMA → Flash 저장 → Flash 재읽기 → PC, {args.repeat}회 모두 성공")
-        print(f"총 검증 데이터: {args.size * args.repeat:,}바이트 / 총시간: {total_seconds:.3f} s")
-        return 0
-    except (OSError, TestError) as exc:
-        print("실패:", exc, file=sys.stderr)
-        return 1
-    finally:
-        if port is not None:
-            port.close()
+        size, stored_crc, milliseconds = int(fields[2]), int(fields[3], 16), int(fields[4])
+    except ValueError as exc:
+        raise TestError("파일 저장 응답이 올바르지 않습니다.") from exc
+    if size != len(data) or stored_crc != crc:
+        raise TestError("전체 BMP 저장 CRC 또는 크기가 다릅니다.")
+    return milliseconds
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def dma_stats(port):
+    port.write_all(b"!")
+    fields = port.read_line().split()
+    if len(fields) != 5 or fields[:2] != ["DBM", "STATS"]:
+        raise TestError("Double Buffer 상태 응답이 올바르지 않습니다.")
+    try:
+        return tuple(int(value) for value in fields[2:])
+    except ValueError as exc:
+        raise TestError("잘못된 Double Buffer 통계") from exc
+
+
+def read_gray(port, source, destination, reference):
+    source_crc = zlib.crc32(source) & 0xFFFFFFFF
+    # The final byte is the output depth; the firmware accepts only 8.
+    port.write_all(b"UFG1" + struct.pack("<IIB", len(source), source_crc, 8))
+    line = port.read_line(timeout=30)
+    if line != f"GRAY DATA {len(reference)} 8":
+        raise TestError("MCU: " + line)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_name(destination.name + ".partial")
+    count = 0
+    crc = 0
+    last_percent = -1
+    last_byte_time = 0.0
+    with partial.open("wb") as output:
+        while count < len(reference):
+            chunk = port.read_exact(min(4096, len(reference) - count))
+            count += len(chunk)
+            if count == len(reference):
+                last_byte_time = time.monotonic()
+            output.write(chunk)
+            crc = zlib.crc32(chunk, crc)
+            percent = count * 100 // len(reference)
+            if percent // 10 != last_percent // 10:
+                print(f"  Gray BMP 수신: {percent}%", flush=True)
+                last_percent = percent
+        # Assignment timer ends when the final BMP byte reaches the PC.
+        fields = port.read_line().split()
+        if len(fields) != 5 or fields[:2] != ["GRAY", "DONE"]:
+            raise TestError("Gray 전송 완료 응답이 올바르지 않습니다.")
+        try:
+            output_crc = int(fields[2], 16)
+            stored_source_crc = int(fields[3], 16)
+            gray_ms = int(fields[4])
+        except ValueError as exc:
+            raise TestError("Gray CRC 응답이 올바르지 않습니다.") from exc
+        if output_crc != (crc & 0xFFFFFFFF) or stored_source_crc != source_crc:
+            raise TestError("Gray 출력 CRC 또는 Flash 원본 CRC가 다릅니다.")
+        output.flush()
+        os.fsync(output.fileno())
+    if partial.read_bytes() != reference:
+        raise TestError("MCU 회색조 결과가 PC 기준 변환과 다릅니다.")
+    partial.replace(destination)
+    return gray_ms, last_byte_time, output_crc

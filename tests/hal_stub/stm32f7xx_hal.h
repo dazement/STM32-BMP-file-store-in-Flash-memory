@@ -1,5 +1,7 @@
-#ifndef DMA_TEST_MAIN_H
-#define DMA_TEST_MAIN_H
+/* Stands in for the STM32 HAL on the PC: only what uart_dma.c uses. The real
+   Core/Inc/main.h includes this file, so tests use the real project headers. */
+#ifndef HAL_STUB_H
+#define HAL_STUB_H
 #include <stdint.h>
 #include <stddef.h>
 typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;

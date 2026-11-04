@@ -16,7 +16,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "pc"))
-from uart_flash_test import TestError, auto_port, open_port  # noqa: E402
+from board import TestError, auto_port, open_port  # noqa: E402
 
 WINDOWS = os.name == "nt"
 EXE = ".exe" if WINDOWS else ""
@@ -158,14 +158,10 @@ def main():
             print("SKIP: C 컴파일러(cc, gcc, clang)가 없습니다.")
             skipped.append("C 모의 테스트")
         else:
-            flags = ["-std=c11", "-Wall", "-Wextra", "-Werror"]
-            for name, sources, include in (("t_dma", ["tests/test_uart_dma.c"], "tests/dma_stub"),
-                                           ("t_tx", ["tests/test_uart_tx_dma.c"], "tests/dma_stub"),
-                                           ("t_gray", ["tests/test_bmp_gray.c", "Core/Src/bmp_gray.c"],
-                                            "Core/Inc")):
-                binary = temp / (name + EXE)
-                run([tools["cc"], *flags, "-I", include, *sources, "-o", binary])
-                run([binary])
+            binary = temp / ("test_firmware" + EXE)
+            run([tools["cc"], "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", "tests/hal_stub",
+                 "-I", "Core/Inc", "tests/test_firmware.c", "Core/Src/bmp_gray.c", "-o", binary])
+            run([binary])
             ok("C 모의 테스트 3개")
 
         step(3, "펌웨어 빌드")
@@ -185,13 +181,13 @@ def main():
         ok("다운로드 후 읽어서 대조 일치")
 
         step(5, "원본 BMP 저장 → 복원 (CRC32·SHA-256)")
-        run([sys.executable, "pc/demo_roundtrip.py"])
+        run([sys.executable, "pc/bmp_roundtrip.py"])
 
         step(6, "Gray 전체 과정")
-        run([sys.executable, "pc/bmp_gray.py"])
+        run([sys.executable, "pc/gray_convert.py"])
 
         step(7, "1 KiB 반복 저장·재읽기 12회")
-        run([sys.executable, "pc/uart_flash_test.py", "--repeat", "12"])
+        run([sys.executable, "pc/small_roundtrip.py", "--repeat", "12"])
 
         step(8, "증명 1: 펌웨어 없이 ST 외부 로더로 QSPI Flash 칩 직접 덤프")
         size = INPUT.stat().st_size
@@ -215,8 +211,8 @@ def main():
         ok("RAM 처음·중간·끝 모두 0xA5")
         capture([programmer, "-c", "port=SWD", "mode=HOTPLUG", "-rst"])
         time.sleep(1)
-        run([sys.executable, "pc/demo_roundtrip.py", "--read-only"])
-        run([sys.executable, "pc/bmp_gray.py", "--convert-only"])
+        run([sys.executable, "pc/bmp_roundtrip.py", "--read-only"])
+        run([sys.executable, "pc/gray_convert.py", "--convert-only"])
 
     note = f" / 건너뜀: {', '.join(skipped)}" if skipped else ""
     print(f"\n\033[1;32m모든 단계 PASS ({time.monotonic() - start:.0f}초{note})\033[0m")

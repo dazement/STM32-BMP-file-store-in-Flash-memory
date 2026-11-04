@@ -1,141 +1,14 @@
 #!/usr/bin/env python3
 """Store a >=3 MiB true-color BMP, then compare a complete flash readback."""
 import argparse
-from collections import deque
-import os
 from pathlib import Path
-import struct
 import sys
 import time
 import zlib
 
-from uart_flash_test import TestError, auto_port, open_port, synchronize
-
-ROOT = Path(__file__).resolve().parent
-IMAGE_LIMIT = 0x3F0000
-CHUNK_BYTES = 4096
-
-
-def make_test_bmp(path):
-    width = height = 1024
-    stride = (width * 3 + 3) & ~3
-    image_size = stride * height
-    header = struct.pack("<2sIHHI", b"BM", image_size + 54, 0, 0, 54)
-    header += struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0,
-                          image_size, 2835, 2835, 0, 0)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as output:
-        output.write(header)
-        for y in range(height):
-            row = bytearray(stride)
-            for x in range(width):
-                row[x * 3:x * 3 + 3] = bytes((((x + y) >> 3) & 255,
-                                               (y >> 2) & 255, (x >> 2) & 255))
-            output.write(row)
-
-
-def validate_bmp(data):
-    if not 3 * 1024 * 1024 <= len(data) <= IMAGE_LIMIT:
-        raise TestError("입력 BMP는 3 MiB 이상, 4,128,768바이트 이하여야 합니다.")
-    if len(data) < 54 or data[:2] != b"BM":
-        raise TestError("BMP 파일이 아닙니다.")
-    declared = struct.unpack_from("<I", data, 2)[0]
-    offset = struct.unpack_from("<I", data, 10)[0]
-    dib, width, height, planes, bpp, compression = struct.unpack_from("<IiiHHI", data, 14)
-    if declared != len(data) or dib < 40 or offset < 14 + dib or offset > len(data):
-        raise TestError("BMP 헤더 또는 파일 크기가 올바르지 않습니다.")
-    if width <= 0 or height == 0 or planes != 1 or bpp != 24 or compression != 0:
-        raise TestError("이번 단계는 압축되지 않은 24비트 True Color BMP를 사용합니다.")
-    stride = (width * 3 + 3) & ~3
-    if offset + stride * abs(height) > len(data):
-        raise TestError("BMP 픽셀 데이터가 부족합니다.")
-
-
-def change_baud(port, baud):
-    port.write_all(b"UFS1" + struct.pack("<I", baud))
-    line = port.read_line()
-    if line != f"BAUD {baud}":
-        raise TestError("속도 변경 실패: " + line)
-    port.set_baud(baud)
-    time.sleep(0.08)
-    synchronize(port)
-
-
-def read_flash_file(port, length, destination):
-    port.write_all(b"UFR1" + struct.pack("<I", length))
-    line = port.read_line()
-    if line != f"FILE DATA {length}":
-        raise TestError("MCU: " + line)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    partial = destination.with_name(destination.name + ".partial")
-    crc = 0
-    done = 0
-    last_percent = -1
-    with partial.open("wb") as output:
-        while done < length:
-            chunk = port.read_exact(min(CHUNK_BYTES, length - done))
-            output.write(chunk)
-            crc = zlib.crc32(chunk, crc)
-            done += len(chunk)
-            percent = done * 100 // length
-            if percent // 10 != last_percent // 10:
-                print(f"  Flash 재읽기: {percent}%", flush=True)
-                last_percent = percent
-        line = port.read_line()
-        if line != f"FILE DATA DONE {crc & 0xFFFFFFFF:08X}":
-            raise TestError("Flash 읽기 CRC가 다릅니다: " + line)
-        output.flush()
-        os.fsync(output.fileno())
-    partial.replace(destination)
-    return crc & 0xFFFFFFFF
-
-
-def send_file(port, data):
-    crc = zlib.crc32(data) & 0xFFFFFFFF
-    port.write_all(b"UFL1" + struct.pack("<II", len(data), crc))
-    line = port.read_line()
-    if line != "FILE READY":
-        raise TestError("MCU: " + line)
-    pending = deque()
-    sent = 0
-    last_percent = -1
-    while sent < len(data) or pending:
-        # Two chunks in flight: receive buffer B can fill while A is stored.
-        while sent < len(data) and len(pending) < 2:
-            chunk = data[sent:sent + CHUNK_BYTES]
-            port.write_all(struct.pack("<I", zlib.crc32(chunk) & 0xFFFFFFFF) + chunk)
-            sent += len(chunk)
-            pending.append(sent)
-        line = port.read_line(timeout=8)
-        expected = pending.popleft()
-        if line != f"ACK {expected}":
-            raise TestError("MCU 저장 응답 오류: " + line)
-        percent = expected * 100 // len(data)
-        if percent // 10 != last_percent // 10:
-            print(f"  BMP 저장: {percent}%", flush=True)
-            last_percent = percent
-    line = port.read_line()
-    fields = line.split()
-    if len(fields) != 5 or fields[:2] != ["FILE", "STORED"]:
-        raise TestError("파일 저장 실패: " + line)
-    try:
-        size, stored_crc, milliseconds = int(fields[2]), int(fields[3], 16), int(fields[4])
-    except ValueError as exc:
-        raise TestError("파일 저장 응답이 올바르지 않습니다.") from exc
-    if size != len(data) or stored_crc != crc:
-        raise TestError("전체 BMP 저장 CRC 또는 크기가 다릅니다.")
-    return milliseconds
-
-
-def dma_stats(port):
-    port.write_all(b"!")
-    fields = port.read_line().split()
-    if len(fields) != 5 or fields[:2] != ["DBM", "STATS"]:
-        raise TestError("Double Buffer 상태 응답이 올바르지 않습니다.")
-    try:
-        return tuple(int(value) for value in fields[2:])
-    except ValueError as exc:
-        raise TestError("잘못된 Double Buffer 통계") from exc
+from bmp_image import ROOT, make_test_bmp, validate_bmp
+from board import (TestError, auto_port, change_baud, dma_stats, open_port, read_flash_file,
+                   send_file, synchronize)
 
 
 def main(argv=None):

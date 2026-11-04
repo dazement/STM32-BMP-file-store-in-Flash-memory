@@ -45,12 +45,10 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
-    Core/Src/flash_test.c
-    Core/Src/uart_flash_test.c
-    Core/Src/uart_dma_rx.c
-    Core/Src/uart_dma_tx.c
+    Core/Src/qspi_flash.c
+    Core/Src/uart_commands.c
+    Core/Src/uart_dma.c
     Core/Src/bmp_gray.c
-    Core/Src/gray_flash.c
     Core/Src/debug_log.c
 )
 

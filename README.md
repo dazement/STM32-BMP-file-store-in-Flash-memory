@@ -23,15 +23,35 @@ cd STM32-BMP-file-store-in-Flash-memory
 ```
 
 이 README의 명령은 저장소 폴더에서 실행합니다. **Windows에서는 `python3` 대신 `py`를 씁니다**
-(예: `py pc/bmp_gray.py`). 포트를 직접 고를 때는 `--port /dev/cu.usbmodem1103`(macOS),
+(예: `py pc/gray_convert.py`). 포트를 직접 고를 때는 `--port /dev/cu.usbmodem1103`(macOS),
 `--port COM5`(Windows)처럼 지정합니다.
 
 | 작업 | macOS | Windows (PowerShell·명령 프롬프트) |
 | --- | --- | --- |
 | 전체 실행 | `./run_all.sh` | `py run_all.py` |
-| Gray 변환 | `python3 pc/bmp_gray.py` | `py pc/bmp_gray.py` |
-| 원본 저장·복원 Demo | `python3 pc/demo_roundtrip.py` | `py pc/demo_roundtrip.py` |
+| Gray 변환 | `python3 pc/gray_convert.py` | `py pc/gray_convert.py` |
+| 원본 저장·복원 Demo | `python3 pc/bmp_roundtrip.py` | `py pc/bmp_roundtrip.py` |
 | PC 단위 테스트 | `python3 -m unittest discover -s pc -p "test_*.py"` | `py -m unittest discover -s pc -p "test_*.py"` |
+
+## 파일 구성
+
+| 파일 | 역할 |
+| --- | --- |
+| `Core/Src/main.c` | CubeMX 생성 코드. Flash ID를 읽고 명령 처리를 시작합니다 |
+| `Core/Src/uart_commands.c` | PC 명령 처리: UFT1(1 KiB 확인), UFL1(파일 저장), UFR1(파일 읽기), UFS1(속도), UFG1(Gray), `?`(ID), `!`(버퍼 통계) |
+| `Core/Src/uart_dma.c` | USART1 DMA: RX 하드웨어 Double Buffer, TX 이중 버퍼 |
+| `Core/Src/qspi_flash.c` | W25Q128 QSPI Flash 드라이버: ID, 읽기, 삭제, Page Program |
+| `Core/Src/bmp_gray.c` | BMP 헤더 해석·생성, Gray 변환, CRC32 (HAL을 쓰지 않아 PC에서도 컴파일) |
+| `Core/Src/debug_log.c` | 디버거로 보는 RAM 로그 |
+| `pc/board.py` | 시리얼 포트 연결과 모든 보드 명령의 PC 쪽 |
+| `pc/bmp_image.py` | 테스트 BMP 생성, 입력 검사, PC 기준 Gray 변환 |
+| `pc/bmp_roundtrip.py` | 3 MiB 원본 저장·복원 Demo (CRC32·SHA-256, JSON 기록) |
+| `pc/gray_convert.py` | 원본 저장 → Flash 재읽기 → Gray 변환 → PC 수신, 시간 CSV 기록 |
+| `pc/bmp_store.py` | 원본 저장·재읽기 진단 (버퍼 A/B 모두 사용 확인, `*_flash_readback.bmp`) |
+| `pc/small_roundtrip.py` | 칩 마지막 4 KiB에서 1 KiB 저장·재읽기 반복 |
+| `pc/test_pc.py` | 보드 없이 실행하는 PC 단위 테스트 |
+| `tests/test_firmware.c` | 보드 없이 실행하는 C 모의 테스트 (RX·TX·BMP) |
+| `run_all.py` | 테스트 → 빌드 → 다운로드 → 보드 검증 9단계 |
 
 ## STM32CubeMX 설정
 
@@ -94,7 +114,7 @@ USART1 global interrupt, DMA2 stream2 global interrupt, DMA2 stream7 global inte
 새 펌웨어를 다운로드하고 Continue를 누른 뒤, Serial Monitor를 닫고 실행합니다.
 
 ```sh
-python3 pc/bmp_gray.py
+python3 pc/gray_convert.py
 ```
 
 운용 출력은 8비트 Gray로 고정합니다. UART 전송 단위는 8N1이며 입력 원본은 24비트 BMP를 유지합니다.
@@ -112,13 +132,13 @@ PC는 출력 CRC, Flash 원본 CRC, 독립 기준 변환과의 바이트 비교�
 `pc/results/timings.csv`에 입력 전송 요청부터 Gray 마지막 바이트 수신까지의 시간을 기록합니다.
 삭제 시간은 본 처리 시간에 포함됩니다.
 `--repeat 3`으로 8비트 출력을 3회 측정하면 중앙값을 확인할 수 있습니다.
-`--format 8`이 기본이며, `--baud 2250000`으로 더 높은 링크 속도를 시험할 수 있습니다.
+`--baud 2250000`으로 더 높은 링크 속도를 시험할 수 있습니다.
 
 Flash의 저장 데이터만으로 변환하는 확인은 MCU를 리셋한 뒤 다음과 같이 실행합니다.
 원본 파일은 Flash CRC와 출력 비교의 기준으로만 PC에서 사용하며 MCU로 재전송하지 않습니다.
 
 ```sh
-python3 pc/bmp_gray.py --convert-only
+python3 pc/gray_convert.py --convert-only
 ```
 
 ## 실행
@@ -194,7 +214,7 @@ CPU가 `WFI`로 잠든 동안에도 디버거 연결이 유지되도록 `main.c`
 ## 작은 데이터 반복 확인
 
 ```sh
-python3 pc/uart_flash_test.py --repeat 12
+python3 pc/small_roundtrip.py --repeat 12
 ```
 
 이 테스트는 칩의 마지막 4 KiB에서 1024바이트 저장·재읽기를 반복합니다.
@@ -210,23 +230,21 @@ python3 -m unittest discover -s pc -p "test_*.py" -v
 ```
 
 아래 C 모의 검사 명령은 macOS 기준입니다. Windows에서는 `py run_all.py`가 `gcc`나 `clang`을 찾아 같은 검사를 실행합니다.
-DBM 소비자 검사는 생산 코드에 모의 DMA 레지스터를 연결하여
-인터럽트가 알리기 전의 데이터는 읽지 않는지, `WFI` 대기 중 인터럽트로 깨어나 이어 읽는지,
-A/B 전환, 부분 수신, 지연된 IRQ, 덮어쓰기 감지와 오류 복구를 확인합니다.
+`tests/test_firmware.c` 하나가 세 묶음을 차례로 검사하고 묶음마다 PASS 줄을 출력합니다.
+`tests/hal_stub/stm32f7xx_hal.h`가 HAL을 대신하므로 펌웨어의 실제 헤더와 소스를 그대로 씁니다.
+
+- UART RX 이중 버퍼: 생산 코드에 모의 DMA 레지스터를 연결하여 인터럽트가 알리기 전의 데이터는 읽지 않는지,
+  `WFI` 대기 중 인터럽트로 깨어나 이어 읽는지, A/B 전환, 부분 수신, 지연된 IRQ, 덮어쓰기 감지와 오류 복구를 확인합니다.
+- UART TX 이중 버퍼: 버퍼 소유권, 부분 Flush, 전송 순서, 시작 실패, UART 오류, 시간 초과를 확인합니다.
+- BMP Gray 변환 핵심 함수: 색 변환, CRC, 행 패딩, 저장 순서, 잘못된 헤더를 확인합니다.
 
 ```sh
-cc -std=c11 -Wall -Wextra -Werror -I tests/dma_stub tests/test_uart_dma.c -o /tmp/bmp_gray_dbm_test
-/tmp/bmp_gray_dbm_test
+cc -std=c11 -Wall -Wextra -Werror -I tests/hal_stub -I Core/Inc tests/test_firmware.c Core/Src/bmp_gray.c -o /tmp/bmp_gray_firmware_test
+/tmp/bmp_gray_firmware_test
 ```
 
-TX 이중 버퍼와 BMP 변환 핵심 함수도 같은 방식으로 검사합니다.
-
-```sh
-cc -std=c11 -Wall -Wextra -Werror -I tests/dma_stub tests/test_uart_tx_dma.c -o /tmp/bmp_gray_tx_test
-/tmp/bmp_gray_tx_test
-cc -std=c11 -Wall -Wextra -Werror -I Core/Inc tests/test_bmp_gray.c Core/Src/bmp_gray.c -o /tmp/bmp_gray_core_test
-/tmp/bmp_gray_core_test
-```
+`/tmp/bmp_gray_firmware_test 입력.bmp 출력.bmp`처럼 파일 두 개를 주면
+펌웨어의 Gray 변환 코드로 실제 BMP를 PC에서 변환합니다. 보드 없이 변환 결과를 PC 기준 변환과 비교할 때 씁니다.
 
 모의 검사는 실제 보드에서의 통신 검증을 대신하지 않습니다.
 
@@ -271,8 +289,8 @@ Flash 저장 증명은 두 가지입니다.
 
 | 항목 | 10-15 (폴링) | 11-04 (인터럽트) |
 | --- | --- | --- |
-| 원본 저장·복원 `demo_roundtrip.py` | 86.5 s | 86.3 s, 전체 일치, 버퍼 초과 0회 |
-| Gray 전체 과정 `bmp_gray.py` | 72.8 s | 72.7 s, 출력 CRC32 58622AEF 동일 |
+| 원본 저장·복원 `bmp_roundtrip.py` | 86.5 s | 86.3 s, 전체 일치, 버퍼 초과 0회 |
+| Gray 전체 과정 `gray_convert.py` | 72.8 s | 72.7 s, 출력 CRC32 58622AEF 동일 |
 | Gray 변환 MCU 시간 | 20.9 s | 20.5 s |
 | RAM 전체 덮어쓴 뒤 복원 `--read-only` | 34.6 s | 34.1 s, 전체 일치 |
 
@@ -287,15 +305,15 @@ UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트
 | 항목 | 명령 | 결과 |
 | --- | --- | --- |
 | PC 단위 테스트 | `python3 -m unittest discover -s pc -p 'test_*.py'` | 18개 PASS |
-| C 모의 테스트 | `tests/test_uart_dma.c`, `test_uart_tx_dma.c`, `test_bmp_gray.c` | 3개 PASS |
+| C 모의 테스트 | `tests/test_firmware.c` (RX·TX·BMP 세 묶음) | 3개 PASS |
 | 펌웨어 빌드 | CMake Debug, GCC 14.3.1 | 경고 0, FLASH 38,164 B (3.6%), RAM 35,320 B (10.8%) |
 | 다운로드 | STM32_Programmer_CLI | Download verified successfully |
-| 원본 저장·복원 | `demo_roundtrip.py` | 3,145,782바이트 전체 일치, CRC32·SHA-256 일치, 버퍼 초과 0회, 86.5 s |
-| Gray 전체 과정 | `bmp_gray.py` | Flash CRC 일치, 기준 변환과 일치, 72.8 s |
-| 작은 데이터 반복 | `uart_flash_test.py --repeat 12` | 12회 모두 PASS |
+| 원본 저장·복원 | `bmp_roundtrip.py` | 3,145,782바이트 전체 일치, CRC32·SHA-256 일치, 버퍼 초과 0회, 86.5 s |
+| Gray 전체 과정 | `gray_convert.py` | Flash CRC 일치, 기준 변환과 일치, 72.8 s |
+| 작은 데이터 반복 | `small_roundtrip.py --repeat 12` | 12회 모두 PASS |
 | Flash 칩 직접 덤프 | ST 외부 로더 `W25Q128JVEIQ_STM32F746G-DISCO.stldr` | `0x90000000`부터 3,145,782바이트 = 원본 BMP |
-| RAM 전체 덮어쓴 뒤 복원 | `demo_roundtrip.py --read-only` | RAM 320 KB를 0xA5로 채운 뒤에도 전체 일치, 34.6 s |
-| RAM 전체 덮어쓴 뒤 Gray 변환 | `bmp_gray.py --convert-only` | Flash CRC 일치, 기준 변환과 일치, 20.9 s |
+| RAM 전체 덮어쓴 뒤 복원 | `bmp_roundtrip.py --read-only` | RAM 320 KB를 0xA5로 채운 뒤에도 전체 일치, 34.6 s |
+| RAM 전체 덮어쓴 뒤 Gray 변환 | `gray_convert.py --convert-only` | Flash CRC 일치, 기준 변환과 일치, 20.9 s |
 
 원본과 복원 BMP의 SHA-256은 `0bfd1da377908544c1b1d2c0e10f8a3b53434448786bcac53d12b27c50f1dd8c`로 같습니다.
 8비트 Gray 출력은 1,049,654바이트, CRC32 58622AEF로 이전 측정과 같습니다.
@@ -308,7 +326,7 @@ UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트
 원본 BMP 그대로 저장·복원하는 실행 프로그램입니다.
 
 ```sh
-python3 pc/demo_roundtrip.py
+python3 pc/bmp_roundtrip.py
 ```
 
 리셋 후 Flash에서 복원만 확인하려면 `--read-only`를 사용합니다.

@@ -21,10 +21,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdio.h>
-#include <string.h>
-#include "flash_test.h"
-#include "uart_flash_test.h"
+#include "qspi_flash.h"
+#include "uart_commands.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -67,33 +65,7 @@ static void MX_QUADSPI_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/* Read-only probe: no erase, program, or flash status-register writes. */
-static HAL_StatusTypeDef Flash_ReadJedecId(uint8_t id[3])
-{
-  QSPI_CommandTypeDef command = {0};
-  command.InstructionMode = QSPI_INSTRUCTION_1_LINE;
-  command.Instruction = 0x9FU;
-  command.AddressMode = QSPI_ADDRESS_NONE;
-  command.AlternateByteMode = QSPI_ALTERNATE_BYTES_NONE;
-  command.DataMode = QSPI_DATA_1_LINE;
-  command.DummyCycles = 0;
-  command.NbData = 3;
-  command.DdrMode = QSPI_DDR_MODE_DISABLE;
-  command.DdrHoldHalfCycle = QSPI_DDR_HHC_ANALOG_DELAY;
-  command.SIOOMode = QSPI_SIOO_INST_EVERY_CMD;
 
-  HAL_StatusTypeDef status = HAL_QSPI_Command(&hqspi, &command, 100);
-  if (status == HAL_OK)
-  {
-    status = HAL_QSPI_Receive(&hqspi, id, 100);
-  }
-  if (status != HAL_OK)
-  {
-    /* Recover the controller so the next diagnostic attempt can run. */
-    HAL_QSPI_Abort(&hqspi);
-  }
-  return status;
-}
 /* USER CODE END 0 */
 
 /**
@@ -152,8 +124,8 @@ int main(void)
   HAL_DBGMCU_EnableDBGSleepMode();
   uint8_t jedec[3] = {0};
   HAL_Delay(10);
-  Flash_ReadJedecId(jedec);
-  UartFlashTest_Init(&hqspi, &huart1, jedec);
+  QspiFlash_ReadId(&hqspi, jedec);
+  UartCommands_Init(&hqspi, &huart1, jedec);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -163,7 +135,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    UartFlashTest_Poll();
+    UartCommands_Poll();
   }
   /* USER CODE END 3 */
 }

@@ -1,9 +1,7 @@
-#include "uart_flash_test.h"
-#include "flash_test.h"
-#include "uart_dma_rx.h"
+#include "uart_commands.h"
+#include "qspi_flash.h"
+#include "uart_dma.h"
 #include "bmp_gray.h"
-#include "gray_flash.h"
-#include "uart_dma_tx.h"
 #include "debug_log.h"
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +12,7 @@
 #define PAYLOAD_OFFSET PAGE_BYTES
 #define IMAGE_LIMIT 0x3F0000U
 #define BLOCK_BYTES 65536U
+#define PIXELS_PER_CHUNK 1024U
 
 static QSPI_HandleTypeDef *flash;
 static UART_HandleTypeDef *serial;
@@ -25,6 +24,9 @@ static uint8_t magic_position;
 static uint32_t last_magic_tick;
 static const uint8_t record_magic[8] = {'U','F','T','R','E','C','0','1'};
 static uint8_t file_buffer[4096];
+static uint8_t input_rgb[PIXELS_PER_CHUNK * 3];
+static uint8_t converted[PIXELS_PER_CHUNK];
+static uint8_t output_header[1078];
 
 static uint32_t get_u32(const uint8_t *data)
 {
@@ -38,14 +40,9 @@ static void put_u32(uint8_t *data, uint32_t value)
     data[i] = (uint8_t)(value >> (8U * i));
 }
 
-static uint32_t crc32_update(uint32_t crc, const uint8_t *data, uint32_t count)
-{
-  return BmpGray_CrcUpdate(crc, data, count);
-}
-
 static uint32_t crc32(const uint8_t *data, uint32_t count)
 {
-  return crc32_update(0xFFFFFFFFU, data, count) ^ 0xFFFFFFFFU;
+  return BmpGray_CrcUpdate(0xFFFFFFFFU, data, count) ^ 0xFFFFFFFFU;
 }
 
 static void send_line(const char *line)
@@ -140,7 +137,7 @@ static void handle_transfer(void)
     return;
   }
 
-  if (FlashTest_Read(flash, sector_address, sector, sizeof(sector)) != HAL_OK)
+  if (QspiFlash_Read(flash, sector_address, sector, sizeof(sector)) != HAL_OK)
   {
     send_line("ERROR sector precheck read\n");
     return;
@@ -152,8 +149,8 @@ static void handle_transfer(void)
   }
 
   uint32_t start = HAL_GetTick();
-  if (FlashTest_Erase(flash, sector_address) != HAL_OK ||
-      FlashTest_Read(flash, sector_address, sector, sizeof(sector)) != HAL_OK ||
+  if (QspiFlash_EraseSector(flash, sector_address) != HAL_OK ||
+      QspiFlash_Read(flash, sector_address, sector, sizeof(sector)) != HAL_OK ||
       !all_ff(sector, sizeof(sector)))
   {
     send_line("ERROR erase or erase verification\n");
@@ -164,7 +161,7 @@ static void handle_transfer(void)
     uint32_t count = length - offset;
     if (count > PAGE_BYTES)
       count = PAGE_BYTES;
-    if (FlashTest_ProgramPage(flash, sector_address + PAYLOAD_OFFSET + offset,
+    if (QspiFlash_ProgramPage(flash, sector_address + PAYLOAD_OFFSET + offset,
                               received + offset, count) != HAL_OK)
     {
       send_line("ERROR page program\n");
@@ -173,7 +170,7 @@ static void handle_transfer(void)
   }
 
   /* Commit ownership only after actual flash bytes match the UART input. */
-  if (FlashTest_Read(flash, sector_address + PAYLOAD_OFFSET, sector, length) != HAL_OK ||
+  if (QspiFlash_Read(flash, sector_address + PAYLOAD_OFFSET, sector, length) != HAL_OK ||
       memcmp(received, sector, length) != 0 || crc32(sector, length) != input_crc)
   {
     send_line("ERROR flash readback mismatch\n");
@@ -183,8 +180,8 @@ static void handle_transfer(void)
   memcpy(record, record_magic, sizeof(record_magic));
   put_u32(record + 8, length);
   put_u32(record + 12, input_crc);
-  if (FlashTest_ProgramPage(flash, sector_address, record, sizeof(record)) != HAL_OK ||
-      FlashTest_Read(flash, sector_address, sector, sizeof(sector)) != HAL_OK ||
+  if (QspiFlash_ProgramPage(flash, sector_address, record, sizeof(record)) != HAL_OK ||
+      QspiFlash_Read(flash, sector_address, sector, sizeof(sector)) != HAL_OK ||
       memcmp(sector, record, sizeof(record)) != 0 || !sector_is_reusable())
   {
     send_line("ERROR stored record verification\n");
@@ -228,13 +225,13 @@ static void stream_flash(void)
     uint32_t count = length - offset;
     if (count > sizeof(file_buffer))
       count = sizeof(file_buffer);
-    if (FlashTest_Read(flash, offset, file_buffer, count) != HAL_OK ||
+    if (QspiFlash_Read(flash, offset, file_buffer, count) != HAL_OK ||
         UartDmaTx_Write(file_buffer, count) != HAL_OK)
     {
       UartDmaTx_Abort();
       return; /* No successful trailer on failure. */
     }
-    crc = crc32_update(crc, file_buffer, count);
+    crc = BmpGray_CrcUpdate(crc, file_buffer, count);
   }
   if (UartDmaTx_Flush() != HAL_OK)
   {
@@ -282,7 +279,7 @@ static void receive_file(void)
       return;
     }
     if ((offset & (BLOCK_BYTES - 1U)) == 0 &&
-        FlashTest_EraseBlock64(flash, offset) != HAL_OK)
+        QspiFlash_EraseBlock64(flash, offset) != HAL_OK)
     {
       send_line("ERROR file block erase\n");
       return;
@@ -292,19 +289,19 @@ static void receive_file(void)
       uint32_t n = count - page;
       if (n > PAGE_BYTES)
         n = PAGE_BYTES;
-      if (FlashTest_ProgramPage(flash, offset + page, file_buffer + page, n) != HAL_OK)
+      if (QspiFlash_ProgramPage(flash, offset + page, file_buffer + page, n) != HAL_OK)
       {
         send_line("ERROR file page program\n");
         return;
       }
     }
-    if (FlashTest_Read(flash, offset, sector, count) != HAL_OK ||
+    if (QspiFlash_Read(flash, offset, sector, count) != HAL_OK ||
         memcmp(file_buffer, sector, count) != 0)
     {
       send_line("ERROR file flash verification\n");
       return;
     }
-    crc = crc32_update(crc, sector, count);
+    crc = BmpGray_CrcUpdate(crc, sector, count);
     char line[80];
     snprintf(line, sizeof(line), "ACK %lu\n", (unsigned long)(offset + count));
     send_line(line);
@@ -346,6 +343,13 @@ static void change_baud(void)
     UartDmaRx_Start(serial);
 }
 
+static int emit(const uint8_t *data, uint32_t count, uint32_t *crc)
+{
+  if (UartDmaTx_Write(data, count) != HAL_OK) return 0;
+  *crc = BmpGray_CrcUpdate(*crc, data, count);
+  return 1;
+}
+
 static void send_gray(void)
 {
   uint8_t request[9];
@@ -359,11 +363,89 @@ static void send_gray(void)
     send_line("ERROR unsupported flash ID\n");
     return;
   }
-  GrayFlash_Send(flash, serial, get_u32(request), get_u32(request + 4), request[8]);
+  uint32_t file_size = get_u32(request);
+  uint32_t expected_crc = get_u32(request + 4);
+  uint32_t start = HAL_GetTick();
+  if (request[8] != 8)
+  {
+    send_line("ERROR Gray output is fixed at 8 bits\n");
+    return;
+  }
+  if (file_size < 54 || file_size > IMAGE_LIMIT ||
+      QspiFlash_Read(flash, 0, input_rgb, 54) != HAL_OK)
+  {
+    send_line("ERROR gray source read or size\n");
+    return;
+  }
+  BmpGrayInfo info;
+  if (!BmpGray_Parse(input_rgb, file_size, &info))
+  {
+    send_line("ERROR unsupported or malformed stored BMP\n");
+    return;
+  }
+
+  /* Verify the entire stored file, including its header, padding and trailing
+     bytes. This also permits conversion after a reset with no image in RAM. */
+  uint32_t source_crc = 0xFFFFFFFFU;
+  for (uint32_t offset = 0; offset < file_size; offset += sizeof(input_rgb))
+  {
+    uint32_t count = file_size - offset;
+    if (count > sizeof(input_rgb)) count = sizeof(input_rgb);
+    if (QspiFlash_Read(flash, offset, input_rgb, count) != HAL_OK)
+    {
+      send_line("ERROR stored BMP CRC read\n");
+      return;
+    }
+    source_crc = BmpGray_CrcUpdate(source_crc, input_rgb, count);
+  }
+  source_crc ^= 0xFFFFFFFFU;
+  if (source_crc != expected_crc)
+  {
+    send_line("ERROR stored BMP CRC mismatch\n");
+    return;
+  }
+  if (UartDmaTx_Begin(serial) != HAL_OK)
+  {
+    send_line("ERROR gray TX DMA startup\n");
+    return;
+  }
+  char line[96];
+  snprintf(line, sizeof(line), "GRAY DATA %lu 8\n", (unsigned long)info.output_size);
+  send_line(line);
+  uint32_t output_crc = 0xFFFFFFFFU;
+  uint32_t header_size = BmpGray_MakeHeader(&info, output_header);
+  if (!emit(output_header, header_size, &output_crc)) goto failure;
+
+  for (uint32_t row = 0; row < info.rows; ++row)
+  {
+    for (uint32_t x = 0; x < info.width; x += PIXELS_PER_CHUNK)
+    {
+      uint32_t pixels = info.width - x;
+      if (pixels > PIXELS_PER_CHUNK) pixels = PIXELS_PER_CHUNK;
+      uint32_t address = info.pixel_offset + row * info.input_stride + x * 3U;
+      /* Fresh SPI Flash read, not the prior UART receive buffer. */
+      if (QspiFlash_Read(flash, address, input_rgb, pixels * 3U) != HAL_OK) goto failure;
+      BmpGray_Convert(input_rgb, pixels, converted);
+      if (!emit(converted, pixels, &output_crc)) goto failure;
+    }
+    uint32_t padding = info.output_stride - info.width;
+    static const uint8_t zeros[3] = {0};
+    if (padding && !emit(zeros, padding, &output_crc)) goto failure;
+  }
+  if (UartDmaTx_Flush() != HAL_OK) goto failure;
+  snprintf(line, sizeof(line), "GRAY DONE %08lX %08lX %lu\n",
+           (unsigned long)(output_crc ^ 0xFFFFFFFFU), (unsigned long)source_crc,
+           (unsigned long)(HAL_GetTick() - start));
+  send_line(line);
+  return;
+
+failure:
+  /* No successful trailer is emitted for a partial or failed output. */
+  UartDmaTx_Abort();
 }
 
-void UartFlashTest_Init(QSPI_HandleTypeDef *qspi, UART_HandleTypeDef *uart,
-                        const uint8_t jedec[3])
+void UartCommands_Init(QSPI_HandleTypeDef *qspi, UART_HandleTypeDef *uart,
+                       const uint8_t jedec[3])
 {
   flash = qspi;
   serial = uart;
@@ -380,7 +462,7 @@ void UartFlashTest_Init(QSPI_HandleTypeDef *qspi, UART_HandleTypeDef *uart,
     send_line("UART double-buffer Flash test ready. Run PC test.\r\n");
 }
 
-void UartFlashTest_Poll(void)
+void UartCommands_Poll(void)
 {
   uint8_t byte;
   HAL_StatusTypeDef status = UartDmaRx_Read(&byte, 1, 10);
