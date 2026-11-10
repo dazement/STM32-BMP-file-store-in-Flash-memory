@@ -294,7 +294,8 @@ Flash 저장 증명은 두 가지입니다.
 | Gray 변환 MCU 시간 | 20.9 s | 20.5 s |
 | RAM 전체 덮어쓴 뒤 복원 `--read-only` | 34.6 s | 34.1 s, 전체 일치 |
 
-11-04 측정 기록은 `pc/results/demo_report_20261104_*.json`과 `pc/results/timings.csv`에 있습니다.
+`pc/results/`에는 가장 최근 실행 결과만 둡니다. 이 표의 10-15·11-04 측정 기록(JSON, CSV)은
+커밋 `aefd8a6`까지의 git 기록에 있습니다(예: `git show aefd8a6:pc/results/timings.csv`).
 
 STM32F746G-DISCO(ST-LINK V2J40M27, QSPI Flash W25Q128 / JEDEC EF4018)에서 백업을 제거한 현재 소스를
 빌드·다운로드한 뒤 `run_all.py`로 확인했습니다(전체 약 4분).
@@ -319,7 +320,7 @@ UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트
 8비트 Gray 출력은 1,049,654바이트, CRC32 58622AEF로 이전 측정과 같습니다.
 프로젝트 스크립트와 별도로 `shasum`·`cmp`로 복원 파일을 비교하고,
 변환식을 다시 계산해 1,048,576개 픽셀 모두와 256단계 팔레트가 일치함을 확인했습니다.
-측정 기록은 `pc/results/demo_report_20261015_*.json`과 `pc/results/timings.csv`에 있습니다.
+측정 기록(`demo_report_20261015_*.json`, `timings.csv`)은 커밋 `aefd8a6`까지의 git 기록에 있습니다.
 
 ## 10월 21일 2차 발표 필수 Demo
 
