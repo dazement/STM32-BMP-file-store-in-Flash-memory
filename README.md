@@ -68,7 +68,7 @@ cd STM32-BMP-file-store-in-Flash-memory
 | USART1 | Mode: Asynchronous, PA9 TX, PB7 RX (ST-LINK 가상 COM 포트) |
 | USART1 Parameter | 115200 Bits/s, 8 Bits, Parity None, Stop Bits 1, TX and RX, Over Sampling 16, HW Flow Control 없음 |
 | QUADSPI | Bank1 with Quad SPI Lines: PB2 CLK, PB6 NCS, PD11 IO0, PD12 IO1, PE2 IO2, PD13 IO3 |
-| QUADSPI Parameter | Clock Prescaler 7 (27 MHz), FIFO Threshold 4, Sample Shifting: Half Cycle, Flash Size 23 (16 MiB), Chip Select High Time 8 Cycles, Clock Mode Low |
+| QUADSPI Parameter | Clock Prescaler 26 (8 MHz), FIFO Threshold 4, Sample Shifting: Half Cycle, Flash Size 23 (16 MiB), Chip Select High Time 8 Cycles, Clock Mode Low |
 | CORTEX_M7 | CPU ICache·DCache Disabled, MPU는 CubeMX 기본 Region 0 유지 |
 
 USART1의 DMA Settings 탭에서 두 요청을 추가합니다. 두 요청 모두 FIFO는 사용하지 않습니다.

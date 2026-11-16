@@ -50,7 +50,7 @@ def main(argv=None):
                       input_sha256=expected_sha, restored_sha256=actual_sha,
                       byte_equal=equal, flash_jedec=chip, flash_model=flash_model,
                       required_flash_model="W25Q32", exact_required_chip=chip == "EF4016",
-                      uart_format="8N1", baud=args.baud, spi_mode="1-1-1", spi_clock_hz=27000000,
+                      uart_format="8N1", baud=args.baud, spi_mode="1-1-1", spi_clock_hz=8000000,
                       dma_buffer_bytes=4096, dma_buffers=2, dma_a=a, dma_b=b, dma_overruns=overruns,
                       store_mcu_ms=store_ms, roundtrip_and_verification_seconds=elapsed)
         report_path = ROOT / "results" / f"demo_report_{stamp}.json"
