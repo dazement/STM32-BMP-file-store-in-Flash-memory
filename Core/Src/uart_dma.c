@@ -225,16 +225,6 @@ HAL_StatusTypeDef UartDmaRx_Read(uint8_t *data, uint32_t count, uint32_t timeout
   return HAL_OK;
 }
 
-void UartDmaRx_GetStats(uint32_t *a, uint32_t *b, uint32_t *overruns)
-{
-  uint32_t state = __get_PRIMASK();
-  __disable_irq();
-  *a = uart_rx_debug.bank_full[0];
-  *b = uart_rx_debug.bank_full[1];
-  *overruns = uart_rx_debug.overruns;
-  __set_PRIMASK(state);
-}
-
 /* D-cache remains disabled in this project, as for the RX DMA buffers. */
 static uint8_t tx_buffers[2][TX_BYTES] __attribute__((aligned(32)));
 static UART_HandleTypeDef *tx_uart;

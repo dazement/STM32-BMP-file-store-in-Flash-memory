@@ -29,39 +29,44 @@ def make_test_bmp(path):
             output.write(row)
 
 
+def check_bmp_header(data):
+    """Uncompressed 24-bit BMP with all pixel rows present; returns (offset, width, height)."""
+    if len(data) < 54 or data[:2] != b"BM":
+        raise TestError("BMP 파일이 아닙니다.")
+    declared, = struct.unpack_from("<I", data, 2)
+    offset, = struct.unpack_from("<I", data, 10)
+    dib, width, height, planes, bpp, compression = struct.unpack_from("<IiiHHI", data, 14)
+    if declared != len(data) or not 40 <= dib <= len(data) - 14 or not 14 + dib <= offset <= len(data):
+        raise TestError("BMP 헤더 또는 파일 크기가 올바르지 않습니다.")
+    if width <= 0 or height in (0, -2147483648) or planes != 1 or bpp != 24 or compression != 0:
+        raise TestError("이번 단계는 압축되지 않은 24비트 True Color BMP를 사용합니다.")
+    if offset + ((width * 3 + 3) & ~3) * abs(height) > len(data):
+        raise TestError("BMP 픽셀 데이터가 부족합니다.")
+    return offset, width, height
+
+
 def validate_bmp(data):
     if not 3 * 1024 * 1024 <= len(data) <= IMAGE_LIMIT:
         raise TestError("입력 BMP는 3 MiB 이상, 4,128,768바이트 이하여야 합니다.")
-    if len(data) < 54 or data[:2] != b"BM":
-        raise TestError("BMP 파일이 아닙니다.")
-    declared = struct.unpack_from("<I", data, 2)[0]
-    offset = struct.unpack_from("<I", data, 10)[0]
-    dib, width, height, planes, bpp, compression = struct.unpack_from("<IiiHHI", data, 14)
-    if declared != len(data) or dib < 40 or offset < 14 + dib or offset > len(data):
-        raise TestError("BMP 헤더 또는 파일 크기가 올바르지 않습니다.")
-    if width <= 0 or height == 0 or planes != 1 or bpp != 24 or compression != 0:
-        raise TestError("이번 단계는 압축되지 않은 24비트 True Color BMP를 사용합니다.")
-    stride = (width * 3 + 3) & ~3
-    if offset + stride * abs(height) > len(data):
-        raise TestError("BMP 픽셀 데이터가 부족합니다.")
+    check_bmp_header(data)
+
+
+def load_input_bmp(path):
+    """Reads --in, or the test image (created if missing); returns (path, bytes)."""
+    source = path or ROOT / "images" / "test_1024x1024.bmp"
+    if path is None and not source.exists():
+        make_test_bmp(source)
+    data = source.read_bytes()
+    validate_bmp(data)
+    return source, data
 
 
 def gray_reference(data):
     """Independent PC reference; handles stored row order and row padding."""
-    if len(data) < 54 or data[:2] != b"BM":
-        raise TestError("지원되지 않는 BMP")
-    size, = struct.unpack_from("<I", data, 2)
-    offset, = struct.unpack_from("<I", data, 10)
-    dib, width, height, planes, source_bpp, compression = struct.unpack_from("<IiiHHI", data, 14)
-    if (size != len(data) or dib < 40 or dib > len(data) - 14 or
-            not 14 + dib <= offset <= len(data) or width <= 0 or
-            height in (0, -2147483648) or planes != 1 or source_bpp != 24 or compression != 0):
-        raise TestError("잘못된 True Color BMP 헤더")
+    offset, width, height = check_bmp_header(data)
     rows = abs(height)
     source_stride = (width * 3 + 3) & ~3
     target_stride = (width + 3) & ~3
-    if offset + source_stride * rows > len(data):
-        raise TestError("BMP 픽셀 데이터 부족")
     header_size = 1078
     image_size = target_stride * rows
     x_ppm, y_ppm = struct.unpack_from("<ii", data, 38)

@@ -76,13 +76,17 @@ static HAL_StatusTypeDef write_enable(QSPI_HandleTypeDef *qspi)
   return ((sr1 & 0x03U) == 0x02U) ? HAL_OK : HAL_ERROR;
 }
 
-static HAL_StatusTypeDef erase_sector(QSPI_HandleTypeDef *qspi, uint32_t address)
+/* Sector (0x20) or 64 KiB block (0xD8) erase, waiting before and after. */
+static HAL_StatusTypeDef erase(QSPI_HandleTypeDef *qspi, uint8_t instruction,
+                               uint32_t address, uint32_t timeout_ms)
 {
-  HAL_StatusTypeDef status = write_enable(qspi);
+  HAL_StatusTypeDef status = wait_ready(qspi, timeout_ms);
   if (status == HAL_OK)
-    status = send_command(qspi, 0x20, address, 1);
+    status = write_enable(qspi);
   if (status == HAL_OK)
-    status = wait_ready(qspi, 2000);
+    status = send_command(qspi, instruction, address, 1);
+  if (status == HAL_OK)
+    status = wait_ready(qspi, timeout_ms);
   return status;
 }
 
@@ -129,20 +133,12 @@ HAL_StatusTypeDef QspiFlash_EraseSector(QSPI_HandleTypeDef *qspi, uint32_t addre
 {
   if (address >= 0x1000000U || (address & (SECTOR_BYTES - 1U)) != 0)
     return HAL_ERROR;
-  HAL_StatusTypeDef status = wait_ready(qspi, 2000);
-  return status == HAL_OK ? erase_sector(qspi, address) : status;
+  return erase(qspi, 0x20, address, 2000);
 }
 
 HAL_StatusTypeDef QspiFlash_EraseBlock64(QSPI_HandleTypeDef *qspi, uint32_t address)
 {
   if (address >= 0x1000000U || (address & 0xFFFFU) != 0)
     return HAL_ERROR;
-  HAL_StatusTypeDef status = wait_ready(qspi, 5000);
-  if (status == HAL_OK)
-    status = write_enable(qspi);
-  if (status == HAL_OK)
-    status = send_command(qspi, 0xD8, address, 1);
-  if (status == HAL_OK)
-    status = wait_ready(qspi, 5000);
-  return status;
+  return erase(qspi, 0xD8, address, 5000);
 }

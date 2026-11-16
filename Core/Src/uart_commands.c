@@ -20,8 +20,8 @@ static uint8_t chip_id[3];
 static uint32_t sector_address;
 static uint8_t received[MAX_PAYLOAD];
 static uint8_t sector[SECTOR_BYTES];
-static uint8_t magic_position;
-static uint32_t last_magic_tick;
+static uint8_t window[4];  /* last bytes received; a command is "UF<op>1" */
+static uint32_t last_byte_tick;
 static const uint8_t record_magic[8] = {'U','F','T','R','E','C','0','1'};
 static uint8_t file_buffer[4096];
 static uint8_t input_rgb[PIXELS_PER_CHUNK * 3];
@@ -49,6 +49,15 @@ static void send_line(const char *line)
 {
   DebugLog_Write(line);
   HAL_UART_Transmit(serial, (uint8_t *)line, (uint16_t)strlen(line), 1000);
+}
+
+/* Reads the fixed-size request that follows a command; reports a timeout. */
+static int read_request(uint8_t *request, uint32_t size, const char *error)
+{
+  if (UartDmaRx_Read(request, size, 2000) == HAL_OK)
+    return 1;
+  send_line(error);
+  return 0;
 }
 
 /* Reception health after each command, for the debugger's log view. */
@@ -107,11 +116,8 @@ static int sector_is_reusable(void)
 static void handle_transfer(void)
 {
   uint8_t header[8];
-  if (UartDmaRx_Read(header, sizeof(header), 2000) != HAL_OK)
-  {
-    send_line("ERROR header timeout\n");
+  if (!read_request(header, sizeof(header), "ERROR header timeout\n"))
     return;
-  }
   uint32_t length = get_u32(header);
   uint32_t input_crc = get_u32(header + 4);
   if (length == 0 || length > MAX_PAYLOAD)
@@ -200,11 +206,8 @@ static void handle_transfer(void)
 static void stream_flash(void)
 {
   uint8_t request[4];
-  if (UartDmaRx_Read(request, sizeof(request), 2000) != HAL_OK)
-  {
-    send_line("ERROR read request timeout\n");
+  if (!read_request(request, sizeof(request), "ERROR read request timeout\n"))
     return;
-  }
   uint32_t length = get_u32(request);
   if (!sector_address || length == 0 || length > IMAGE_LIMIT)
   {
@@ -246,11 +249,8 @@ static void stream_flash(void)
 static void receive_file(void)
 {
   uint8_t header[8];
-  if (UartDmaRx_Read(header, sizeof(header), 2000) != HAL_OK)
-  {
-    send_line("ERROR file header timeout\n");
+  if (!read_request(header, sizeof(header), "ERROR file header timeout\n"))
     return;
-  }
   uint32_t length = get_u32(header);
   uint32_t expected_crc = get_u32(header + 4);
   if (!sector_address || !length || length > IMAGE_LIMIT)
@@ -322,11 +322,8 @@ static void receive_file(void)
 static void change_baud(void)
 {
   uint8_t request[4];
-  if (UartDmaRx_Read(request, sizeof(request), 2000) != HAL_OK)
-  {
-    send_line("ERROR baud request timeout\n");
+  if (!read_request(request, sizeof(request), "ERROR baud request timeout\n"))
     return;
-  }
   uint32_t baud = get_u32(request);
   if (baud != 115200 && baud != 921600 && baud != 2250000)
   {
@@ -353,11 +350,8 @@ static int emit(const uint8_t *data, uint32_t count, uint32_t *crc)
 static void send_gray(void)
 {
   uint8_t request[9];
-  if (UartDmaRx_Read(request, sizeof(request), 2000) != HAL_OK)
-  {
-    send_line("ERROR gray request timeout\n");
+  if (!read_request(request, sizeof(request), "ERROR gray request timeout\n"))
     return;
-  }
   if (!sector_address)
   {
     send_line("ERROR unsupported flash ID\n");
@@ -455,7 +449,6 @@ void UartCommands_Init(QSPI_HandleTypeDef *qspi, UART_HandleTypeDef *uart,
     sector_address = 0xFFF000U;
   else if (chip_id[0] == 0xEF && chip_id[1] == 0x40 && chip_id[2] == 0x16)
     sector_address = 0x3FF000U;
-  magic_position = 0;
   if (UartDmaRx_Start(serial) != HAL_OK)
     send_line("ERROR UART DMA startup\r\n");
   else
@@ -473,49 +466,41 @@ void UartCommands_Poll(void)
       log_rx_health();
       DebugLog_Write("RX error: restarting reception");
       UartDmaRx_Start(serial);
-      magic_position = 0;
+      memset(window, 0, sizeof(window));
     }
     return;
   }
-  if (magic_position && (uint32_t)(HAL_GetTick() - last_magic_tick) > 1000U)
-    magic_position = 0;
   if (byte == '?')
   {
     char line[64];
     snprintf(line, sizeof(line), "UFT READY %02X%02X%02X DBM GRAY GRAY8\n",
              (unsigned)chip_id[0], (unsigned)chip_id[1], (unsigned)chip_id[2]);
     send_line(line);
-    magic_position = 0;
+    memset(window, 0, sizeof(window));
     return;
   }
   if (byte == '!')
   {
-    uint32_t a, b, overruns;
-    UartDmaRx_GetStats(&a, &b, &overruns);
     char line[80];
     snprintf(line, sizeof(line), "DBM STATS %lu %lu %lu\n",
-             (unsigned long)a, (unsigned long)b, (unsigned long)overruns);
+             (unsigned long)uart_rx_debug.bank_full[0],
+             (unsigned long)uart_rx_debug.bank_full[1],
+             (unsigned long)uart_rx_debug.overruns);
     send_line(line);
-    magic_position = 0;
+    memset(window, 0, sizeof(window));
     return;
   }
-  static uint8_t operation;
-  if (magic_position == 0)
-    magic_position = byte == 'U' ? 1 : 0;
-  else if (magic_position == 1)
-    magic_position = byte == 'F' ? 2 : (byte == 'U' ? 1 : 0);
-  else if (magic_position == 2)
+  /* Bytes more than 1 s apart do not form a command. */
+  if ((uint32_t)(HAL_GetTick() - last_byte_tick) > 1000U)
+    memset(window, 0, sizeof(window));
+  last_byte_tick = HAL_GetTick();
+  memmove(window, window + 1, sizeof(window) - 1);
+  window[3] = byte;
+  uint8_t operation = window[2];
+  if (window[0] == 'U' && window[1] == 'F' && window[3] == '1' &&
+      memchr("TLRSG", operation, 5) != NULL)
   {
-    operation = byte;
-    magic_position = (byte == 'T' || byte == 'L' || byte == 'R' ||
-                      byte == 'S' || byte == 'G') ? 3 : 0;
-  }
-  else
-    magic_position = byte == '1' ? 4 : (byte == 'U' ? 1 : 0);
-  last_magic_tick = HAL_GetTick();
-  if (magic_position == 4)
-  {
-    magic_position = 0;
+    memset(window, 0, sizeof(window));
     DebugLog_Printf("CMD UF%c1", (char)operation);
     if (operation == 'T') handle_transfer();
     else if (operation == 'R') stream_flash();

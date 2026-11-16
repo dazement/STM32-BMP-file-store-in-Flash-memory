@@ -305,7 +305,7 @@ UART는 921600 baud, 입력은 `pc/images/test_1024x1024.bmp`(3,145,782바이트
 
 | 항목 | 명령 | 결과 |
 | --- | --- | --- |
-| PC 단위 테스트 | `python3 -m unittest discover -s pc -p 'test_*.py'` | 18개 PASS |
+| PC 단위 테스트 | `python3 -m unittest discover -s pc -p 'test_*.py'` | 16개 PASS |
 | C 모의 테스트 | `tests/test_firmware.c` (RX·TX·BMP 세 묶음) | 3개 PASS |
 | 펌웨어 빌드 | CMake Debug, GCC 14.3.1 | 경고 0, FLASH 38,164 B (3.6%), RAM 35,320 B (10.8%) |
 | 다운로드 | STM32_Programmer_CLI | Download verified successfully |

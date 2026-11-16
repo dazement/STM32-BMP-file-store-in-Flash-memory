@@ -4,6 +4,7 @@ macOS/Linux need only the standard library (termios). Windows needs pyserial;
 when pyserial is installed it is used on every OS.
 """
 from collections import deque
+from contextlib import contextmanager
 import glob
 import os
 import select
@@ -189,8 +190,8 @@ def synchronize(port):
             chip_id = fields[2]
             if chip_id not in ("EF4018", "EF4016"):
                 raise TestError("지원되지 않는 Flash ID: " + chip_id)
-            port.rx_mode = fields[3] if len(fields) > 3 else "POLLING"
-            port.capabilities = tuple(fields[4:])
+            if "DBM" not in fields or "GRAY8" not in fields:
+                raise TestError("새 펌웨어를 다운로드하고 ▶ Continue를 누르세요.")
             return chip_id
 
 
@@ -235,6 +236,27 @@ def change_baud(port, baud):
     port.set_baud(baud)
     time.sleep(0.08)
     synchronize(port)
+
+
+@contextmanager
+def connect(path, baud):
+    """Opens the board (auto-selected without a path) at the given baud.
+    On exit the board goes back to 115200 and the port is closed."""
+    port = open_port(path or auto_port())
+    high_baud = False
+    try:
+        chip = synchronize(port)
+        if baud != 115200:
+            high_baud = True
+            change_baud(port, baud)
+        yield port, chip
+    finally:
+        if high_baud:
+            try:
+                change_baud(port, 115200)
+            except (OSError, TestError):
+                print("다음 실행 전에 보드 RESET을 눌러 UART 속도를 초기화하세요.", file=sys.stderr)
+        port.close()
 
 
 def read_flash_file(port, length, destination):

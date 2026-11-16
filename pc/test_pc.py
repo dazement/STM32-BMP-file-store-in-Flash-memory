@@ -61,28 +61,18 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(port.writes, [])
 
     def test_sync_skips_boot_message(self):
-        port = FakePort(["UART Flash test ready.", "UFT READY EF4018"])
+        port = FakePort(["UART Flash test ready.", "UFT READY EF4018 DBM GRAY GRAY8"])
         self.assertEqual(synchronize(port), "EF4018")
         self.assertEqual(port.writes, [b"?"])
 
     def test_unknown_chip_blocks_transfer(self):
         with self.assertRaises(TestError):
-            synchronize(FakePort(["UFT READY 20BA18"]))
+            synchronize(FakePort(["UFT READY 20BA18 DBM GRAY GRAY8"]))
 
-    def test_dma_firmware_identified(self):
-        port = FakePort(["UFT READY EF4018 DMA"])
-        self.assertEqual(synchronize(port), "EF4018")
-        self.assertEqual(port.rx_mode, "DMA")
-
-    def test_old_firmware_identified(self):
-        port = FakePort(["UFT READY EF4018"])
-        synchronize(port)
-        self.assertEqual(port.rx_mode, "POLLING")
-
-    def test_double_buffer_firmware_identified(self):
-        port = FakePort(["UFT READY EF4018 DBM"])
-        self.assertEqual(synchronize(port), "EF4018")
-        self.assertEqual(port.rx_mode, "DBM")
+    def test_old_firmware_rejected(self):
+        for line in ("UFT READY EF4018", "UFT READY EF4018 DMA", "UFT READY EF4018 DBM"):
+            with self.assertRaisesRegex(TestError, "새 펌웨어"):
+                synchronize(FakePort([line]))
 
 
 class StreamPort(FakePort):

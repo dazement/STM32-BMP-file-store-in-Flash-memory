@@ -9,9 +9,8 @@ import sys
 import time
 import zlib
 
-from bmp_image import ROOT, make_test_bmp, validate_bmp
-from board import (TestError, auto_port, change_baud, dma_stats, open_port, read_flash_file,
-                   send_file, synchronize)
+from bmp_image import ROOT, load_input_bmp
+from board import TestError, connect, dma_stats, read_flash_file, send_file
 
 
 def main(argv=None):
@@ -21,38 +20,28 @@ def main(argv=None):
     parser.add_argument("--baud", type=int, choices=(115200, 921600, 2250000), default=921600)
     parser.add_argument("--read-only", action="store_true", help="리셋 후 Flash에서 복원만 수행")
     args = parser.parse_args(argv)
-    port = None
-    high_baud = False
     try:
-        source_path = args.input_path or ROOT / "images" / "test_1024x1024.bmp"
-        if args.input_path is None and not source_path.exists(): make_test_bmp(source_path)
-        source = source_path.read_bytes()
-        validate_bmp(source)
+        source_path, source = load_input_bmp(args.input_path)
         expected_crc = zlib.crc32(source) & 0xFFFFFFFF
         expected_sha = hashlib.sha256(source).hexdigest()
         print("원본:", source_path, flush=True)
         print(f"크기: {len(source):,}바이트 / CRC32: {expected_crc:08X}", flush=True)
-        port = open_port(args.port or auto_port())
-        chip = synchronize(port)
-        if port.rx_mode != "DBM": raise TestError("새 펌웨어를 다운로드하고 Continue를 누르세요.")
-        flash_model = "W25Q128" if chip == "EF4018" else "W25Q32"
-        print(f"실제 Flash: {flash_model} / JEDEC: {chip} / UART: 8N1", flush=True)
-        if args.baud != 115200:
-            high_baud = True
-            change_baud(port, args.baud)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        store_ms = 0
-        start = time.monotonic()
-        if not args.read_only: store_ms = send_file(port, source)
-        destination = ROOT / "results" / f"demo_restored_{stamp}.bmp"
-        actual_crc = read_flash_file(port, len(source), destination)
-        restored = destination.read_bytes()
-        actual_sha = hashlib.sha256(restored).hexdigest()
-        equal = source == restored
-        if not equal or actual_crc != expected_crc or actual_sha != expected_sha:
-            raise TestError("원본과 복원 파일의 내용이 다릅니다.")
-        elapsed = time.monotonic() - start
-        a, b, overruns = dma_stats(port)
+        with connect(args.port, args.baud) as (port, chip):
+            flash_model = "W25Q128" if chip == "EF4018" else "W25Q32"
+            print(f"실제 Flash: {flash_model} / JEDEC: {chip} / UART: 8N1", flush=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            store_ms = 0
+            start = time.monotonic()
+            if not args.read_only: store_ms = send_file(port, source)
+            destination = ROOT / "results" / f"demo_restored_{stamp}.bmp"
+            actual_crc = read_flash_file(port, len(source), destination)
+            restored = destination.read_bytes()
+            actual_sha = hashlib.sha256(restored).hexdigest()
+            equal = source == restored
+            if not equal or actual_crc != expected_crc or actual_sha != expected_sha:
+                raise TestError("원본과 복원 파일의 내용이 다릅니다.")
+            elapsed = time.monotonic() - start
+            a, b, overruns = dma_stats(port)
         if overruns: raise TestError("DMA 버퍼 초과가 발생했습니다.")
         report = dict(timestamp=datetime.now().isoformat(timespec="seconds"),
                       mode="flash_read_only" if args.read_only else "live_roundtrip",
@@ -78,12 +67,6 @@ def main(argv=None):
     except (OSError, TestError) as exc:
         print("실패:", exc, file=sys.stderr)
         return 1
-    finally:
-        if port is not None:
-            if high_baud:
-                try: change_baud(port, 115200)
-                except (OSError, TestError): print("다음 실행 전에 보드 RESET을 누르세요.", file=sys.stderr)
-            port.close()
 
 
 if __name__ == "__main__": sys.exit(main())

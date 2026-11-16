@@ -109,9 +109,8 @@ static void rx_tests(void)
     deliver(1024);
     check_read(1024, block * 1024);
   }
-  uint32_t a, b, lost;
-  UartDmaRx_GetStats(&a, &b, &lost);
-  assert(a == 5 && b == 5 && lost == 0);
+  assert(uart_rx_debug.bank_full[0] == 5 && uart_rx_debug.bank_full[1] == 5);
+  assert(uart_rx_debug.overruns == 0);
   assert(uart_rx_debug.half_full == 10 && uart_rx_debug.line_idle == 40);
   assert(uart_rx_debug.received == 40960 && uart_rx_debug.sleeps == 0);
   /* Bytes already in RAM stay unread until an interrupt announces them:
