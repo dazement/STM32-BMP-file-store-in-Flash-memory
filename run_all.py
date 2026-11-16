@@ -181,10 +181,10 @@ def main():
         ok("다운로드 후 읽어서 대조 일치")
 
         step(5, "원본 BMP 저장 → 복원 (CRC32·SHA-256)")
-        run([sys.executable, "pc/bmp_roundtrip.py"])
+        run([sys.executable, "pc/bmp_roundtrip.py", "--baud", "115200"])
 
         step(6, "Gray 전체 과정")
-        run([sys.executable, "pc/gray_convert.py"])
+        run([sys.executable, "pc/gray_convert.py", "--baud", "115200"])
 
         step(7, "1 KiB 반복 저장·재읽기 12회")
         run([sys.executable, "pc/small_roundtrip.py", "--repeat", "12"])
@@ -211,8 +211,8 @@ def main():
         ok("RAM 처음·중간·끝 모두 0xA5")
         capture([programmer, "-c", "port=SWD", "mode=HOTPLUG", "-rst"])
         time.sleep(1)
-        run([sys.executable, "pc/bmp_roundtrip.py", "--read-only"])
-        run([sys.executable, "pc/gray_convert.py", "--convert-only"])
+        run([sys.executable, "pc/bmp_roundtrip.py", "--read-only", "--baud", "115200"])
+        run([sys.executable, "pc/gray_convert.py", "--convert-only", "--baud", "115200"])
 
     note = f" / 건너뜀: {', '.join(skipped)}" if skipped else ""
     print(f"\n\033[1;32m모든 단계 PASS ({time.monotonic() - start:.0f}초{note})\033[0m")
